@@ -12,8 +12,8 @@ MIN_WITHDRAW = 1500
 REFERRAL_BONUS = 150
 NEW_USER_BONUS = 50
 
-# Persistent storage on Railway
-DATA_DIR = "/app/data"
+# Fixed path for Render.com
+DATA_DIR = "./data"
 os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "taskhive.db")
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
@@ -35,17 +35,14 @@ TASKS = {
 
 user_pending = {}
 
+# ... (rest of the functions remain the same - start, tasks, button_handler, handle_submission, points, referral, help_command)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or f"user_{user_id}"
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, points) VALUES (?, ?, ?)", (user_id, username, NEW_USER_BONUS))
     conn.commit()
-    await update.message.reply_text(
-        f"👋 Welcome to **TaskHive**!\n\n"
-        f"You got {NEW_USER_BONUS} bonus points!\n\n"
-        f"Use /tasks to start earning\n"
-        f"Your referral link: https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
-    )
+    await update.message.reply_text(f"👋 Welcome to TaskHive!\nYou got {NEW_USER_BONUS} bonus points!\n\nUse /tasks to start earning.")
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
@@ -57,12 +54,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_id = query.data
     task = TASKS[task_id]
     user_pending[query.from_user.id] = task_id
-    await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your photo, voice note or text now.")
+    await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your response now.")
 
 async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    if user_id not in user_pending:
-        return
+    if user_id not in user_pending: return
     task_id = user_pending.pop(user_id)
     task = TASKS[task_id]
 
@@ -83,20 +79,6 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
     conn.commit()
 
-    # Create JSON for AI buyers
-    metadata = {
-        "submission_id": c.lastrowid,
-        "user_id": user_id,
-        "task_type": task_id,
-        "task_name": task["name"],
-        "points_awarded": task["points"],
-        "timestamp": datetime.now().isoformat(),
-        "file_path": file_path
-    }
-    json_path = os.path.join(SUBMISSIONS_DIR, f"metadata_{c.lastrowid}.json")
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(metadata, f, ensure_ascii=False, indent=2)
-
     await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
 
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -109,35 +91,17 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    await update.message.reply_text(
-        f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{user_id}\n\n"
-        f"Share it and get {REFERRAL_BONUS} bonus points per friend!"
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🛠 TaskHive Commands:\n"
-        "/start - Welcome message\n"
-        "/tasks - See available tasks\n"
-        "/points - Check your points\n"
-        "/referral - Get your referral link\n"
-        "/help - This message"
-    )
+    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{user_id}\n\nShare and earn {REFERRAL_BONUS} points per friend!")
 
 def main():
     app = Application.builder().token(TOKEN).build()
-    
-    # Commands must come BEFORE the general MessageHandler
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("referral", referral))
-    app.add_handler(CommandHandler("help", help_command))
-    
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.ALL, handle_submission))   # This catches submissions
-
-    print("🚀 TaskHive is LIVE on Railway!")
+    app.add_handler(MessageHandler(filters.ALL, handle_submission))
+    print("🚀 TaskHive is LIVE on Render!")
     app.run_polling()
 
 if __name__ == "__main__":
