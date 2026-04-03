@@ -4,6 +4,8 @@ import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+import asyncio
+from aiohttp import web
 
 TOKEN = os.getenv("TOKEN")
 BOT_USERNAME = "TaskHiveDataBot"
@@ -11,7 +13,7 @@ BOT_USERNAME = "TaskHiveDataBot"
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 
-# Persistent folder on Railway
+# Folder for saving files
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
@@ -83,13 +85,32 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💰 Your points: **{pts}**")
 
 def main():
+    print("🚀 Starting TaskHive Bot on Render...")
+
     app = Application.builder().token(TOKEN).build()
+    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE on Railway!")
+
+    # Dummy server for Render
+    async def health_check(request):
+        return web.Response(text="Bot is alive!")
+    
+    async def start_dummy_server():
+        app_web = web.Application()
+        app_web.router.add_get('/', health_check)
+        runner = web.AppRunner(app_web)
+        await runner.setup()
+        site = web.TCPSite(runner, '0.0.0.0', int(os.getenv("PORT", 10000)))
+        await site.start()
+        print(f"Dummy server running on port {os.getenv('PORT', 10000)}")
+
+    asyncio.create_task(start_dummy_server())
+
+    print("✅ Bot is LIVE!")
     app.run_polling()
 
 if __name__ == "__main__":
