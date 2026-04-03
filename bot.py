@@ -6,9 +6,11 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 TOKEN = os.getenv("TOKEN")
 BOT_USERNAME = "TaskHiveDataBot"
+ADMIN_ID = 8728887265   # Only you have admin access
 
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
+CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
@@ -21,7 +23,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTO
 conn.commit()
 
 TASKS = {
-    "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of a different place around you (street, market, shop, food, etc.)."},
+    "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of your surroundings."},
     "2": {"name": "🎙️ Voice Description", "points": 80, "desc": "Record 10-15 second voice note describing what you see."},
     "3": {"name": "📝 Local Prices Survey", "points": 50, "desc": "Tell us current prices: 1kg rice, 1kg sugar, loaf of bread, plate of ugali + meat."},
     "4": {"name": "🍲 Popular Local Food", "points": 40, "desc": "What is the most popular food/drink in your area?"},
@@ -29,6 +31,7 @@ TASKS = {
 }
 
 user_pending = {}
+adding_task = {}  # For admin adding new task
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -36,8 +39,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
     result = c.fetchone()
-
-    channel_link = "https://t.me/+6WtlEwqjwccxOTVk"
 
     if result:
         pts = result[0]
@@ -48,8 +49,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"👋 Welcome to TaskHive, @{username}!\n\n"
             f"You received **{NEW_USER_BONUS} bonus points**!\n\n"
-            f"Join our Announcement Channel for updates:\n{channel_link}\n\n"
-            f"Use /tasks to start earning money."
+            f"Join our Announcement Channel:\n{CHANNEL_LINK}\n\n"
+            f"Use /tasks to start earning."
         )
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -62,10 +63,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_id = query.data
     task = TASKS[task_id]
 
-    # Check if user already did this task
     c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
     if c.fetchone():
-        await query.edit_message_text("❌ You have already completed this task.\nYou cannot repeat the same task.")
+        await query.edit_message_text("❌ You have already completed this task.")
         return
 
     user_pending[query.from_user.id] = task_id
@@ -113,8 +113,47 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/points - Check your points\n"
         "/referral - Get your referral link\n"
         "/help - This message\n\n"
-        "📢 Join our Announcement Channel:\nhttps://t.me/+6WtlEwqjwccxOTVk"
+        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
     )
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ You are not authorized to use this command.")
+        return
+
+    # Count users
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+
+    # Count submissions
+    c.execute("SELECT COUNT(*) FROM submissions")
+    total_submissions = c.fetchone()[0]
+
+    # Count files
+    file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
+
+    text = f"🔧 **Admin Panel**\n\n"
+    text += f"👥 Total Users: **{total_users}**\n"
+    text += f"📤 Total Submissions: **{total_submissions}**\n"
+    text += f"📁 Total Files Uploaded: **{file_count}**\n\n"
+    text += "👇 Users List:\n"
+
+    c.execute("SELECT telegram_id, username, points FROM users ORDER BY points DESC LIMIT 15")
+    for row in c.fetchall():
+        text += f"• @{row[1]} → {row[2]} pts\n"
+
+    keyboard = [[InlineKeyboardButton("➕ Add New Task", callback_data="add_new_task")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def callback_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "add_new_task":
+        await query.edit_message_text("➕ Send new task in this format:\n"
+                                      "`Task Name|Points|Description`\n\n"
+                                      "Example:\n`Photo of Market|50|Take clear photo of a local market`")
+        adding_task[query.from_user.id] = True
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -123,9 +162,11 @@ def main():
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("referral", referral))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(callback_admin))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE!")
+    print("🚀 TaskHive is LIVE with Admin Panel!")
     app.run_polling()
 
 if __name__ == "__main__":
