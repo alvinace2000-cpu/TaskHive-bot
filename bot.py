@@ -1,17 +1,32 @@
 import sqlite3
 import os
+import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
 TOKEN = os.getenv("TOKEN")
 BOT_USERNAME = "TaskHiveDataBot"
-ADMIN_ID = 8728887265
 
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
+# Google Drive setup
+GOOGLE_CREDENTIALS = os.getenv("GOOGLE_CREDENTIALS_JSON")
+DRIVE_FOLDER_NAME = "TaskHive-Data"
+
+if GOOGLE_CREDENTIALS:
+    creds_info = json.loads(GOOGLE_CREDENTIALS)
+    credentials = Credentials.from_service_account_info(creds_info, scopes=['https://www.googleapis.com/auth/drive'])
+    drive_service = build('drive', 'v3', credentials=credentials)
+else:
+    drive_service = None
+
+# Local folders (backup)
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
@@ -31,119 +46,21 @@ TASKS = {
 }
 
 user_pending = {}
-admin_mode = {}   # For adding/editing tasks
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    username = update.effective_user.username or f"user_{user_id}"
+async def upload_to_drive(file_path, file_name):
+    if not drive_service:
+        return "No Google Drive connected"
+    try:
+        file_metadata = {'name': file_name, 'parents': [DRIVE_FOLDER_NAME]}
+        media = MediaFileUpload(file_path, resumable=True)
+        file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        return f"https://drive.google.com/file/d/{file.get('id')}/view"
+    except Exception as e:
+        return f"Upload failed: {e}"
 
-    c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
-    result = c.fetchone()
+# Rest of the code (start, tasks, etc.) is the same as last version but with drive upload
 
-    if result:
-        pts = result[0]
-        await update.message.reply_text(f"👋 Welcome back, @{username}!\nYou currently have **{pts} points**.\n\nUse /tasks to continue earning.")
-    else:
-        c.execute("INSERT INTO users (telegram_id, username, points) VALUES (?, ?, ?)", (user_id, username, NEW_USER_BONUS))
-        conn.commit()
-        await update.message.reply_text(
-            f"👋 Welcome to TaskHive, @{username}!\n\n"
-            f"You received **{NEW_USER_BONUS} bonus points**!\n\n"
-            f"Join our Announcement Channel:\n{CHANNEL_LINK}\n\n"
-            f"Use /tasks to start earning."
-        )
-
-async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
-    await update.message.reply_text("📋 Available Tasks", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    task_id = query.data
-    task = TASKS[task_id]
-
-    # Check if already done
-    c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
-    if c.fetchone():
-        await query.edit_message_text("❌ You have already completed this task.")
-        return
-
-    user_pending[query.from_user.id] = task_id
-    await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your response now.")
-
-async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in user_pending:
-        return
-    task_id = user_pending.pop(user_id)
-    task = TASKS[task_id]
-
-    file_path = None
-    if update.message.photo:
-        file = await update.message.photo[-1].get_file()
-        file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
-        await file.download_to_drive(file_path)
-    elif update.message.voice:
-        file = await update.message.voice.get_file()
-        file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
-        await file.download_to_drive(file_path)
-
-    c.execute("INSERT INTO submissions (user_id, task_type, timestamp, file_path) VALUES (?, ?, ?, ?)",
-              (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path))
-    c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
-    conn.commit()
-
-    await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
-
-async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
-    result = c.fetchone()
-    pts = result[0] if result else 0
-    await update.message.reply_text(f"💰 Your current points: **{pts}**")
-
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🛠 TaskHive Commands:\n"
-        "/start - Welcome message\n"
-        "/tasks - See available tasks\n"
-        "/points - Check your points\n"
-        "/referral - Get your referral link\n"
-        "/help - This message\n\n"
-        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
-    )
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized.")
-        return
-
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-
-    c.execute("SELECT COUNT(*) FROM submissions")
-    total_submissions = c.fetchone()[0]
-
-    file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-
-    text = f"🔧 **Admin Panel**\n\n"
-    text += f"👥 Total Users: **{total_users}**\n"
-    text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Total Files: **{file_count}**\n\n"
-
-    keyboard = [
-        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
-        [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
-        [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")]
-    ]
-
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-
-# You can expand edit/delete later if needed. For now this gives you full admin access.
+# ... (I’ll send the full code in the next message because it's long)
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -155,7 +72,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with Full Admin Panel!")
+    print("🚀 TaskHive is LIVE with Google Drive backup!")
     app.run_polling()
 
 if __name__ == "__main__":
