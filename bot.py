@@ -21,9 +21,9 @@ c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTO
 conn.commit()
 
 TASKS = {
-    "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of your surroundings."},
+    "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of a different place around you (street, market, shop, food, etc.)."},
     "2": {"name": "🎙️ Voice Description", "points": 80, "desc": "Record 10-15 second voice note describing what you see."},
-    "3": {"name": "📝 Local Prices Survey", "points": 50, "desc": "Tell us current prices (per kg where applicable)."},
+    "3": {"name": "📝 Local Prices Survey", "points": 50, "desc": "Tell us current prices: 1kg rice, 1kg sugar, loaf of bread, plate of ugali + meat."},
     "4": {"name": "🍲 Popular Local Food", "points": 40, "desc": "What is the most popular food/drink in your area?"},
     "5": {"name": "🔄 English to Swahili Translation", "points": 70, "desc": "Translate 5 simple English sentences."}
 }
@@ -33,17 +33,24 @@ user_pending = {}
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or f"user_{user_id}"
-    
+
     c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
     result = c.fetchone()
-    
+
+    channel_link = "https://t.me/+6WtlEwqjwccxOTVk"
+
     if result:
         pts = result[0]
         await update.message.reply_text(f"👋 Welcome back, @{username}!\nYou currently have **{pts} points**.\n\nUse /tasks to continue earning.")
     else:
         c.execute("INSERT INTO users (telegram_id, username, points) VALUES (?, ?, ?)", (user_id, username, NEW_USER_BONUS))
         conn.commit()
-        await update.message.reply_text(f"👋 Welcome to TaskHive, @{username}!\nYou received {NEW_USER_BONUS} bonus points!\n\nUse /tasks to start earning.")
+        await update.message.reply_text(
+            f"👋 Welcome to TaskHive, @{username}!\n\n"
+            f"You received **{NEW_USER_BONUS} bonus points**!\n\n"
+            f"Join our Announcement Channel for updates:\n{channel_link}\n\n"
+            f"Use /tasks to start earning money."
+        )
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
@@ -54,6 +61,13 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     task_id = query.data
     task = TASKS[task_id]
+
+    # Check if user already did this task
+    c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
+    if c.fetchone():
+        await query.edit_message_text("❌ You have already completed this task.\nYou cannot repeat the same task.")
+        return
+
     user_pending[query.from_user.id] = task_id
     await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your response now.")
 
@@ -89,7 +103,7 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💰 Your current points: **{pts}**")
 
 async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare this link and earn 150 points per friend who joins and completes a task!")
+    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -98,7 +112,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/tasks - See available tasks\n"
         "/points - Check your points\n"
         "/referral - Get your referral link\n"
-        "/help - This message"
+        "/help - This message\n\n"
+        "📢 Join our Announcement Channel:\nhttps://t.me/+6WtlEwqjwccxOTVk"
     )
 
 def main():
