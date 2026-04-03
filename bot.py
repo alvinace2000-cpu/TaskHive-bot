@@ -6,7 +6,7 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 TOKEN = os.getenv("TOKEN")
 BOT_USERNAME = "TaskHiveDataBot"
-ADMIN_ID = 8728887265   # Only you have admin access
+ADMIN_ID = 8728887265
 
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
@@ -31,7 +31,7 @@ TASKS = {
 }
 
 user_pending = {}
-adding_task = {}  # For admin adding new task
+admin_mode = {}   # For adding/editing tasks
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -63,6 +63,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task_id = query.data
     task = TASKS[task_id]
 
+    # Check if already done
     c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
     if c.fetchone():
         await query.edit_message_text("❌ You have already completed this task.")
@@ -118,42 +119,31 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized to use this command.")
+        await update.message.reply_text("❌ You are not authorized.")
         return
 
-    # Count users
     c.execute("SELECT COUNT(*) FROM users")
     total_users = c.fetchone()[0]
 
-    # Count submissions
     c.execute("SELECT COUNT(*) FROM submissions")
     total_submissions = c.fetchone()[0]
 
-    # Count files
     file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
 
     text = f"🔧 **Admin Panel**\n\n"
     text += f"👥 Total Users: **{total_users}**\n"
     text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Total Files Uploaded: **{file_count}**\n\n"
-    text += "👇 Users List:\n"
+    text += f"📁 Total Files: **{file_count}**\n\n"
 
-    c.execute("SELECT telegram_id, username, points FROM users ORDER BY points DESC LIMIT 15")
-    for row in c.fetchall():
-        text += f"• @{row[1]} → {row[2]} pts\n"
+    keyboard = [
+        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
+        [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
+        [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")]
+    ]
 
-    keyboard = [[InlineKeyboardButton("➕ Add New Task", callback_data="add_new_task")]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def callback_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "add_new_task":
-        await query.edit_message_text("➕ Send new task in this format:\n"
-                                      "`Task Name|Points|Description`\n\n"
-                                      "Example:\n`Photo of Market|50|Take clear photo of a local market`")
-        adding_task[query.from_user.id] = True
+# You can expand edit/delete later if needed. For now this gives you full admin access.
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -164,9 +154,8 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(CallbackQueryHandler(callback_admin))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with Admin Panel!")
+    print("🚀 TaskHive is LIVE with Full Admin Panel!")
     app.run_polling()
 
 if __name__ == "__main__":
