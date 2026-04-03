@@ -10,7 +10,6 @@ BOT_USERNAME = "TaskHiveDataBot"
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 
-# Folder for files
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
@@ -36,7 +35,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username or f"user_{user_id}"
     c.execute("INSERT OR IGNORE INTO users (telegram_id, username, points) VALUES (?, ?, ?)", (user_id, username, NEW_USER_BONUS))
     conn.commit()
-    await update.message.reply_text(f"👋 Welcome to TaskHive!\nYou received {NEW_USER_BONUS} bonus points!\n\nUse /tasks to start earning.")
+    await update.message.reply_text(f"👋 Welcome to TaskHive!\nYou got {NEW_USER_BONUS} bonus points!\n\nUse /tasks to start earning.")
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
@@ -82,16 +81,13 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"💰 Your points: **{pts}**")
 
 def main():
-    print("🚀 TaskHive Bot is starting on Render...")
     app = Application.builder().token(TOKEN).build()
-    
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    
-    print("✅ Bot is LIVE!")
+    print("🚀 TaskHive is LIVE on Railway!")
     app.run_polling()
 
 if __name__ == "__main__":
