@@ -1,16 +1,36 @@
 import sqlite3
 import os
+import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
+from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
 
-TOKEN = os.getenv("TOKEN")   # Will use the new token from Railway Variables
-BOT_USERNAME = "TaskHiveDataBot2"   # Update if you chose a different username
+TOKEN = os.getenv("TOKEN")
+BOT_USERNAME = "TaskHiveDataBot"
+ADMIN_ID = 8728887265
 
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
+# Google Drive Setup
+GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
+DRIVE_FOLDER_NAME = "TaskHive-Data"
+
+drive_service = None
+if GOOGLE_CREDENTIALS_JSON:
+    try:
+        creds_info = json.loads(GOOGLE_CREDENTIALS_JSON)
+        credentials = Credentials.from_service_account_info(creds_info, scopes=['https://www.googleapis.com/auth/drive'])
+        drive_service = build('drive', 'v3', credentials=credentials)
+        print("✅ Google Drive connected successfully!")
+    except Exception as e:
+        print(f"⚠️ Google Drive connection failed: {e}")
+
+# Local folders
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
@@ -30,6 +50,31 @@ TASKS = {
 }
 
 user_pending = {}
+
+async def upload_to_drive(file_path, file_name):
+    if not drive_service:
+        print("⚠️ No drive service available")
+        return None
+    try:
+        # Find or create folder
+        query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
+        results = drive_service.files().list(q=query, fields="files(id)").execute()
+        files = results.get('files', [])
+        if files:
+            folder_id = files[0]['id']
+        else:
+            file_metadata = {'name': DRIVE_FOLDER_NAME, 'mimeType': 'application/vnd.google-apps.folder'}
+            folder = drive_service.files().create(body=file_metadata, fields='id').execute()
+            folder_id = folder.get('id')
+
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media = MediaFileUpload(file_path, resumable=True)
+        file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
+        print(f"✅ Uploaded to Drive: {file_name}")
+        return f"https://drive.google.com/file/d/{file.get('id')}/view"
+    except Exception as e:
+        print(f"⚠️ Drive upload error: {e}")
+        return None
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -86,12 +131,18 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
         await file.download_to_drive(file_path)
 
+    # Upload to Google Drive
+    drive_link = await upload_to_drive(file_path, os.path.basename(file_path)) if file_path else None
+
     c.execute("INSERT INTO submissions (user_id, task_type, timestamp, file_path) VALUES (?, ?, ?, ?)",
               (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path))
     c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
     conn.commit()
 
-    await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
+    msg = f"✅ Task completed!\nYou earned +{task['points']} points!"
+    if drive_link:
+        msg += "\n📁 Saved to Google Drive"
+    await update.message.reply_text(msg)
 
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -123,7 +174,7 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE!")
+    print("🚀 TaskHive is LIVE with Google Drive!")
     app.run_polling()
 
 if __name__ == "__main__":
