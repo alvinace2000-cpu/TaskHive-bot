@@ -46,7 +46,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         c.execute("INSERT INTO users (telegram_id, username, points) VALUES (?, ?, ?)", (user_id, username, NEW_USER_BONUS))
         conn.commit()
-        await update.message.reply_text(f"👋 Welcome to TaskHive, @{username}!\nYou received **{NEW_USER_BONUS} bonus points**!\n\nJoin our channel: {CHANNEL_LINK}\nUse /tasks to start earning.")
+        await update.message.reply_text(f"👋 Welcome to TaskHive, @{username}!\nYou received **{NEW_USER_BONUS} bonus points**!\n\nJoin channel: {CHANNEL_LINK}\nUse /tasks to start.")
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
@@ -115,20 +115,27 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"👥 Total Users: **{total_users}**\n"
     text += f"📤 Total Submissions: **{total_submissions}**\n"
     text += f"📁 Files Uploaded: **{file_count}**\n\n"
-    await update.message.reply_text(text)
 
-    # Send all files as zip if any exist
-    if files:
+    keyboard = [[InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]]
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def callback_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    if query.data == "download_zip":
+        files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
+        if not files:
+            await query.edit_message_text("No files to download yet.")
+            return
+
         zip_path = os.path.join(DATA_DIR, "all_submissions.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for f in files:
                 zipf.write(os.path.join(SUBMISSIONS_DIR, f), f)
-        await update.message.reply_document(open(zip_path, 'rb'), filename="all_submissions.zip")
-        os.remove(zip_path)  # clean up
 
-async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # (same as before)
-    pass   # I'll keep it simple for now
+        await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Submissions.zip")
+        os.remove(zip_path)
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -137,6 +144,7 @@ def main():
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(CallbackQueryHandler(callback_admin, pattern="download_zip"))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
     print("🚀 TaskHive is LIVE!")
     app.run_polling()
