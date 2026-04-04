@@ -1,13 +1,12 @@
 import sqlite3
 import os
-import zipfile
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
 TOKEN = os.getenv("TOKEN")
 BOT_USERNAME = "TaskHiveDataBot"
-ADMIN_ID = 8728887265
+ADMIN_ID = 8728887265   # Your ID
 
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
@@ -23,6 +22,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, 
 c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_type TEXT, timestamp TEXT, file_path TEXT)''')
 conn.commit()
 
+# Dynamic tasks (you can add/edit/delete)
 TASKS = {
     "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of your surroundings."},
     "2": {"name": "🎙️ Voice Description", "points": 80, "desc": "Record 10-15 second voice note describing what you see."},
@@ -32,6 +32,7 @@ TASKS = {
 }
 
 user_pending = {}
+admin_action = {}   # For add/edit/delete flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -102,43 +103,19 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized.")
         return
 
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
+    keyboard = [
+        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
+        [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
+        [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")]
+    ]
+    await update.message.reply_text("🔧 **Admin Panel**", reply_markup=InlineKeyboardMarkup(keyboard))
 
-    c.execute("SELECT COUNT(*) FROM submissions")
-    total_submissions = c.fetchone()[0]
-
-    files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
-    file_count = len(files)
-
-    text = f"🔧 **Admin Panel**\n\n"
-    text += f"👥 Total Users: **{total_users}**\n"
-    text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Files Uploaded: **{file_count}**\n\n"
-
-    if file_count > 0:
-        keyboard = [[InlineKeyboardButton("📥 Download All Files as ZIP", callback_data="download_zip")]]
-        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
-    else:
-        await update.message.reply_text(text + "No files uploaded yet.")
-
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "download_zip":
-        files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
-        if not files:
-            await query.edit_message_text("No files to download.")
-            return
-
-        zip_path = os.path.join(DATA_DIR, "TaskHive_All_Files.zip")
-        with zipfile.ZipFile(zip_path, 'w') as zipf:
-            for f in files:
-                zipf.write(os.path.join(SUBMISSIONS_DIR, f), f)
-
-        await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
-        os.remove(zip_path)
+# For simplicity, /addtask command
+async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+    await update.message.reply_text("Send new task in format:\n`Name|Points|Description`")
+    admin_action[update.effective_user.id] = "add"
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -146,10 +123,10 @@ def main():
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CallbackQueryHandler(callback_handler))
+    app.add_handler(CommandHandler("addtask", addtask))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with ZIP Download!")
+    print("🚀 TaskHive is LIVE with Full Admin!")
     app.run_polling()
 
 if __name__ == "__main__":
