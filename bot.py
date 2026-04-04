@@ -20,7 +20,7 @@ os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
 conn = sqlite3.connect(os.path.join(DATA_DIR, "taskhive.db"), check_same_thread=False)
 c = conn.cursor()
 c.execute('''CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, username TEXT, points INTEGER DEFAULT 0)''')
-c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_type TEXT, timestamp TEXT, file_path TEXT)''')
+c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_type TEXT, timestamp TEXT, file_path TEXT, text_answer TEXT)''')
 conn.commit()
 
 TASKS = {
@@ -32,7 +32,7 @@ TASKS = {
 }
 
 user_pending = {}
-admin_state = {}   # For add/edit flow
+admin_mode = {}  # For add/edit/delete flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -75,6 +75,8 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     task = TASKS[task_id]
 
     file_path = None
+    text_answer = None
+
     if update.message.photo:
         file = await update.message.photo[-1].get_file()
         file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
@@ -83,9 +85,11 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await update.message.voice.get_file()
         file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
         await file.download_to_drive(file_path)
+    else:
+        text_answer = update.message.text
 
-    c.execute("INSERT INTO submissions (user_id, task_type, timestamp, file_path) VALUES (?, ?, ?, ?)",
-              (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path))
+    c.execute("INSERT INTO submissions (user_id, task_type, timestamp, file_path, text_answer) VALUES (?, ?, ?, ?, ?)",
+              (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path, text_answer))
     c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
     conn.commit()
 
@@ -118,14 +122,17 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"📁 Files Uploaded: **{file_count}**\n\n"
 
     keyboard = [
-        [InlineKeyboardButton("👥 Users & Points", callback_data="admin_users")],
-        [InlineKeyboardButton("📊 Submissions Summary", callback_data="admin_summary")],
-        [InlineKeyboardButton("📋 Manage Tasks", callback_data="admin_tasks")],
+        [InlineKeyboardButton("👥 View All Users", callback_data="view_users")],
+        [InlineKeyboardButton("📊 View Submissions", callback_data="view_submissions")],
+        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
+        [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
+        [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")],
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
+# Callback for admin buttons
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -142,7 +149,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
         os.remove(zip_path)
 
-    elif query.data == "admin_users":
+    elif query.data == "view_users":
         c.execute("SELECT username, points FROM users ORDER BY points DESC")
         rows = c.fetchall()
         text = "👥 Users & Points:\n\n"
@@ -150,14 +157,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"• @{row[0]} → {row[1]} pts\n"
         await query.edit_message_text(text)
 
-    elif query.data == "admin_summary":
-        c.execute("SELECT COUNT(*) FROM submissions")
-        subs = c.fetchone()[0]
-        files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-        await query.edit_message_text(f"📊 Summary\nTotal Submissions: {subs}\nTotal Files: {files}")
-
-    elif query.data == "admin_tasks":
-        await query.edit_message_text("📋 Manage Tasks\n\nUse /addtask, /edittask, /deletetask commands")
+    elif query.data == "view_submissions":
+        c.execute("SELECT u.username, s.task_type, s.text_answer, s.timestamp FROM submissions s JOIN users u ON s.user_id = u.telegram_id ORDER BY s.timestamp DESC")
+        rows = c.fetchall()
+        text = "📊 Recent Submissions:\n\n"
+        for row in rows[:10]:
+            text += f"@{row[0]} - {row[1]}: {row[2] or 'Media'}\n"
+        await query.edit_message_text(text)
 
 def main():
     app = Application.builder().token(TOKEN).build()
