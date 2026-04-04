@@ -12,7 +12,6 @@ MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
-# Persistent storage folder
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
