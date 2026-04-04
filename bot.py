@@ -4,9 +4,8 @@ from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
 
-TOKEN = os.getenv("TOKEN")
-BOT_USERNAME = "TaskHiveDataBot"
-ADMIN_ID = 8728887265
+TOKEN = os.getenv("TOKEN")   # Will use the new token from Railway Variables
+BOT_USERNAME = "TaskHiveDataBot2"   # Update if you chose a different username
 
 MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
@@ -115,25 +114,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
     )
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized.")
-        return
-
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-
-    c.execute("SELECT COUNT(*) FROM submissions")
-    total_submissions = c.fetchone()[0]
-
-    file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-
-    text = f"🔧 **Admin Panel**\n\n"
-    text += f"👥 Total Users: **{total_users}**\n"
-    text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Total Files: **{file_count}**\n\n"
-    await update.message.reply_text(text)
-
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -141,7 +121,6 @@ def main():
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("referral", referral))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
     print("🚀 TaskHive is LIVE!")
