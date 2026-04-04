@@ -1,11 +1,8 @@
 import sqlite3
 import os
-import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
-import dropbox
-from dropbox.exceptions import AuthError
 
 TOKEN = os.getenv("TOKEN")
 BOT_USERNAME = "TaskHiveDataBot"
@@ -15,19 +12,7 @@ MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
-# Dropbox Setup
-DROPBOX_TOKEN = os.getenv("DROPBOX_TOKEN")
-DROPBOX_FOLDER = "/TaskHive-Data"   # Change if your folder name is different
-
-dbx = None
-if DROPBOX_TOKEN:
-    try:
-        dbx = dropbox.Dropbox(DROPBOX_TOKEN)
-        print("✅ Dropbox connected successfully!")
-    except Exception as e:
-        print(f"⚠️ Dropbox connection failed: {e}")
-
-# Local backup
+# Persistent storage folder
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
@@ -48,20 +33,6 @@ TASKS = {
 
 user_pending = {}
 
-async def upload_to_dropbox(file_path, file_name):
-    if not dbx:
-        return None
-    try:
-        dropbox_path = f"{DROPBOX_FOLDER}/{file_name}"
-        with open(file_path, "rb") as f:
-            dbx.files_upload(f.read(), dropbox_path, mode=dropbox.files.WriteMode.overwrite)
-        print(f"✅ Uploaded to Dropbox: {file_name}")
-        return f"https://www.dropbox.com/home{ DROPBOX_FOLDER }/{file_name}"
-    except Exception as e:
-        print(f"⚠️ Dropbox upload error: {e}")
-        return None
-
-# Rest of the bot (start, tasks, etc.)
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     username = update.effective_user.username or f"user_{user_id}"
@@ -82,7 +53,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Use /tasks to start earning."
         )
 
-# (The rest of the functions are the same as before - tasks, button_handler, handle_submission, points, referral, help_command, admin)
+async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
+    await update.message.reply_text("📋 Available Tasks", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    task_id = query.data
+    task = TASKS[task_id]
+
+    c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
+    if c.fetchone():
+        await query.edit_message_text("❌ You have already completed this task.")
+        return
+
+    user_pending[query.from_user.id] = task_id
+    await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your response now.")
 
 async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -101,20 +88,52 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
         await file.download_to_drive(file_path)
 
-    # Upload to Dropbox
-    dropbox_link = await upload_to_dropbox(file_path, os.path.basename(file_path)) if file_path else None
-
     c.execute("INSERT INTO submissions (user_id, task_type, timestamp, file_path) VALUES (?, ?, ?, ?)",
               (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path))
     c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
     conn.commit()
 
-    msg = f"✅ Task completed!\nYou earned +{task['points']} points!"
-    if dropbox_link:
-        msg += "\n📁 Saved to Dropbox"
-    await update.message.reply_text(msg)
+    await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
 
-# Add the rest of the functions (points, referral, help_command, admin) as before...
+async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
+    result = c.fetchone()
+    pts = result[0] if result else 0
+    await update.message.reply_text(f"💰 Your current points: **{pts}**")
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🛠 TaskHive Commands:\n"
+        "/start - Welcome message\n"
+        "/tasks - See available tasks\n"
+        "/points - Check your points\n"
+        "/referral - Get your referral link\n"
+        "/help - This message\n\n"
+        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
+    )
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ You are not authorized.")
+        return
+
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM submissions")
+    total_submissions = c.fetchone()[0]
+
+    file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
+
+    text = f"🔧 **Admin Panel**\n\n"
+    text += f"👥 Total Users: **{total_users}**\n"
+    text += f"📤 Total Submissions: **{total_submissions}**\n"
+    text += f"📁 Total Files Uploaded: **{file_count}**\n\n"
+    await update.message.reply_text(text)
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -126,7 +145,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with Dropbox backup!")
+    print("🚀 TaskHive is LIVE with Persistent Storage!")
     app.run_polling()
 
 if __name__ == "__main__":
