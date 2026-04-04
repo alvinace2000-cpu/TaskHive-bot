@@ -116,17 +116,20 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"📤 Total Submissions: **{total_submissions}**\n"
     text += f"📁 Files Uploaded: **{file_count}**\n\n"
 
-    keyboard = [[InlineKeyboardButton("📥 Download All Files as ZIP", callback_data="download_all")]]
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    if file_count > 0:
+        keyboard = [[InlineKeyboardButton("📥 Download All Files as ZIP", callback_data="download_zip")]]
+        await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text(text + "No files uploaded yet.")
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "download_all":
+    if query.data == "download_zip":
         files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
         if not files:
-            await query.edit_message_text("No files uploaded yet.")
+            await query.edit_message_text("No files to download.")
             return
 
         zip_path = os.path.join(DATA_DIR, "TaskHive_All_Files.zip")
