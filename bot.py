@@ -116,25 +116,25 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"📤 Total Submissions: **{total_submissions}**\n"
     text += f"📁 Files Uploaded: **{file_count}**\n\n"
 
-    keyboard = [[InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]]
+    keyboard = [[InlineKeyboardButton("📥 Download All Files as ZIP", callback_data="download_all")]]
     await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-async def callback_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "download_zip":
+    if query.data == "download_all":
         files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
         if not files:
-            await query.edit_message_text("No files to download yet.")
+            await query.edit_message_text("No files uploaded yet.")
             return
 
-        zip_path = os.path.join(DATA_DIR, "all_submissions.zip")
+        zip_path = os.path.join(DATA_DIR, "TaskHive_All_Files.zip")
         with zipfile.ZipFile(zip_path, 'w') as zipf:
             for f in files:
                 zipf.write(os.path.join(SUBMISSIONS_DIR, f), f)
 
-        await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Submissions.zip")
+        await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
         os.remove(zip_path)
 
 def main():
@@ -143,10 +143,10 @@ def main():
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(CallbackQueryHandler(callback_admin, pattern="download_zip"))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE!")
+    print("🚀 TaskHive is LIVE with ZIP Download!")
     app.run_polling()
 
 if __name__ == "__main__":
