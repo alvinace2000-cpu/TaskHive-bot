@@ -101,20 +101,6 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pts = result[0] if result else 0
     await update.message.reply_text(f"💰 Your current points: **{pts}**")
 
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🛠 TaskHive Commands:\n"
-        "/start - Welcome message\n"
-        "/tasks - See available tasks\n"
-        "/points - Check your points\n"
-        "/referral - Get your referral link\n"
-        "/help - This message\n\n"
-        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
-    )
-
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
@@ -126,12 +112,17 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("SELECT COUNT(*) FROM submissions")
     total_submissions = c.fetchone()[0]
 
-    file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
+    files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
+    file_count = len(files)
 
     text = f"🔧 **Admin Panel**\n\n"
     text += f"👥 Total Users: **{total_users}**\n"
     text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Total Files Uploaded: **{file_count}**\n\n"
+    text += f"📁 Files in submissions folder: **{file_count}**\n\n"
+    text += "Files List:\n"
+    for f in files[:20]:   # show first 20 files
+        text += f"• {f}\n"
+
     await update.message.reply_text(text)
 
 def main():
@@ -139,12 +130,10 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
-    app.add_handler(CommandHandler("referral", referral))
-    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with Persistent Storage!")
+    print("🚀 TaskHive is LIVE!")
     app.run_polling()
 
 if __name__ == "__main__":
