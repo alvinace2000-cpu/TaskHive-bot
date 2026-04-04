@@ -16,7 +16,7 @@ MIN_WITHDRAW = 1500
 NEW_USER_BONUS = 50
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
-# Google Drive Setup
+# Google Drive
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 DRIVE_FOLDER_NAME = "TaskHive-Data"
 
@@ -30,7 +30,7 @@ if GOOGLE_CREDENTIALS_JSON:
     except Exception as e:
         print(f"⚠️ Google Drive connection failed: {e}")
 
-# Local backup
+# Local folders
 DATA_DIR = "data"
 SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
 os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
@@ -56,7 +56,6 @@ async def upload_to_drive(file_path, file_name):
         return None
     try:
         # Find or create folder
-        folder_id = None
         query = f"name='{DRIVE_FOLDER_NAME}' and mimeType='application/vnd.google-apps.folder' and trashed=false"
         results = drive_service.files().list(q=query, fields="files(id)").execute()
         files = results.get('files', [])
@@ -67,7 +66,6 @@ async def upload_to_drive(file_path, file_name):
             folder = drive_service.files().create(body=file_metadata, fields='id').execute()
             folder_id = folder.get('id')
 
-        # Upload file
         file_metadata = {'name': file_name, 'parents': [folder_id]}
         media = MediaFileUpload(file_path, resumable=True)
         file = drive_service.files().create(body=file_metadata, media_body=media, fields='id').execute()
@@ -131,7 +129,8 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_voice_{datetime.now().strftime('%Y%m%d_%H%M%S')}.ogg")
         await file.download_to_drive(file_path)
 
-    drive_link = await upload_to_drive(file_path, os.path.basename(file_path))
+    # Upload to Google Drive
+    drive_link = await upload_to_drive(file_path, os.path.basename(file_path)) if file_path else None
 
     c.execute("INSERT INTO submissions (user_id, task_type, timestamp, file_path) VALUES (?, ?, ?, ?)",
               (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path))
@@ -140,7 +139,7 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     msg = f"✅ Task completed!\nYou earned +{task['points']} points!"
     if drive_link:
-        msg += f"\n📁 Saved to Google Drive"
+        msg += "\n📁 Saved to Google Drive"
     await update.message.reply_text(msg)
 
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -164,25 +163,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
     )
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ You are not authorized.")
-        return
-
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-
-    c.execute("SELECT COUNT(*) FROM submissions")
-    total_submissions = c.fetchone()[0]
-
-    file_count = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-
-    text = f"🔧 **Admin Panel**\n\n"
-    text += f"👥 Total Users: **{total_users}**\n"
-    text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Total Files: **{file_count}**\n\n"
-    await update.message.reply_text(text)
-
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
@@ -190,7 +170,6 @@ def main():
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("referral", referral))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
     print("🚀 TaskHive is LIVE with Google Drive backup!")
