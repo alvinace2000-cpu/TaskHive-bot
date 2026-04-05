@@ -23,6 +23,7 @@ c.execute('''CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, 
 c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_type TEXT, timestamp TEXT, file_path TEXT, text_answer TEXT)''')
 conn.commit()
 
+# Dynamic tasks (you can add/edit/delete)
 TASKS = {
     "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of your surroundings."},
     "2": {"name": "🎙️ Voice Description", "points": 80, "desc": "Record 10-15 second voice note describing what you see."},
@@ -32,7 +33,7 @@ TASKS = {
 }
 
 user_pending = {}
-admin_state = {}  # For add/edit/delete flow
+admin_state = {}   # For add/edit/delete flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -108,14 +109,17 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     keyboard = [
-        [InlineKeyboardButton("👥 Users & Points", callback_data="admin_users")],
-        [InlineKeyboardButton("📊 Submissions Summary", callback_data="admin_summary")],
-        [InlineKeyboardButton("📋 Manage Tasks", callback_data="admin_tasks")],
+        [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
+        [InlineKeyboardButton("📊 Submissions Summary", callback_data="view_submissions")],
+        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
+        [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
+        [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")],
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
     await update.message.reply_text("🔧 **Admin Panel**", reply_markup=InlineKeyboardMarkup(keyboard))
 
+# Callback handler for admin buttons
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -132,7 +136,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
         os.remove(zip_path)
 
-    elif query.data == "admin_users":
+    elif query.data == "view_users":
         c.execute("SELECT username, points FROM users ORDER BY points DESC")
         rows = c.fetchall()
         text = "👥 Users & Points:\n\n"
@@ -140,19 +144,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"• @{row[0]} → {row[1]} pts\n"
         await query.edit_message_text(text)
 
-    elif query.data == "admin_summary":
-        c.execute("SELECT COUNT(*) FROM submissions")
-        subs = c.fetchone()[0]
-        files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-        await query.edit_message_text(f"📊 Summary\nTotal Submissions: {subs}\nTotal Files: {files}")
+    elif query.data == "view_submissions":
+        c.execute("SELECT u.username, s.task_type, s.text_answer, s.timestamp FROM submissions s JOIN users u ON s.user_id = u.telegram_id ORDER BY s.timestamp DESC")
+        rows = c.fetchall()
+        text = "📊 Recent Submissions:\n\n"
+        for row in rows[:15]:
+            answer = row[2] if row[2] else "Media File"
+            text += f"@{row[0]} - {row[1]}: {answer}\n"
+        await query.edit_message_text(text)
 
-    elif query.data == "admin_tasks":
-        keyboard = [
-            [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
-            [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
-            [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")]
-        ]
-        await query.edit_message_text("📋 Manage Tasks", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif query.data == "add_task":
+        await query.edit_message_text("➕ Send new task in format:\n`Name|Points|Description`\n\nExample:\n`Photo of Market|50|Take clear photo of a local market`")
+        admin_state[query.from_user.id] = "add"
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -163,7 +166,7 @@ def main():
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with Full Button Admin Panel!")
+    print("🚀 TaskHive is LIVE with Improved Admin Panel!")
     app.run_polling()
 
 if __name__ == "__main__":
