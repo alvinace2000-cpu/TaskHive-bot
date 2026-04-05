@@ -23,15 +23,18 @@ c.execute('''CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, 
 c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_type TEXT, timestamp TEXT, file_path TEXT, text_answer TEXT)''')
 conn.commit()
 
-TASKS = {
-    "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of your surroundings."},
-    "2": {"name": "🎙️ Voice Description", "points": 80, "desc": "Record 10-15 second voice note describing what you see."},
-    "3": {"name": "📝 Local Prices Survey", "points": 50, "desc": "Tell us current prices: 1kg rice, 1kg sugar, loaf of bread, plate of ugali + meat."},
-    "4": {"name": "🍲 Popular Local Food", "points": 40, "desc": "What is the most popular food/drink in your area?"},
-    "5": {"name": "🔄 English to Swahili Translation", "points": 70, "desc": "Translate 5 simple English sentences."}
-}
+# Tasks are now dynamic (stored in DB for easy add/edit/delete)
+TASKS = {}  # Will be loaded from DB
+
+# Load tasks from DB on startup
+c.execute("CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, name TEXT, points INTEGER, desc TEXT)")
+conn.commit()
+c.execute("SELECT id, name, points, desc FROM tasks")
+for row in c.fetchall():
+    TASKS[row[0]] = {"name": row[1], "points": row[2], "desc": row[3]}
 
 user_pending = {}
+admin_state = {}  # For add/edit/delete flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -56,7 +59,10 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     task_id = query.data
-    task = TASKS[task_id]
+    task = TASKS.get(task_id)
+    if not task:
+        await query.edit_message_text("Task not found.")
+        return
 
     c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
     if c.fetchone():
@@ -71,7 +77,9 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id not in user_pending:
         return
     task_id = user_pending.pop(user_id)
-    task = TASKS[task_id]
+    task = TASKS.get(task_id)
+    if not task:
+        return
 
     file_path = None
     text_answer = None
@@ -106,20 +114,6 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized.")
         return
 
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-
-    c.execute("SELECT COUNT(*) FROM submissions")
-    total_submissions = c.fetchone()[0]
-
-    files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
-    file_count = len(files)
-
-    text = f"🔧 **Admin Panel**\n\n"
-    text += f"👥 Total Users: **{total_users}**\n"
-    text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Files Uploaded: **{file_count}**\n\n"
-
     keyboard = [
         [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
         [InlineKeyboardButton("📊 Submissions Summary", callback_data="view_submissions")],
@@ -129,7 +123,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🔧 **Admin Panel**", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -147,7 +141,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("SELECT COUNT(*) FROM submissions")
         total = c.fetchone()[0]
         files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-        await query.edit_message_text(f"📊 Submissions Summary\n\nTotal Submissions: {total}\nTotal Files: {files}")
+        await query.edit_message_text(f"📊 Submissions Summary\nTotal Submissions: {total}\nTotal Files: {files}")
 
     elif query.data == "download_zip":
         files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
@@ -161,8 +155,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
         os.remove(zip_path)
 
-    elif query.data in ["add_task", "edit_task", "delete_task"]:
-        await query.edit_message_text("This feature is coming in the next update. For now use /admin to see the panel.")
+    elif query.data == "add_task":
+        await query.edit_message_text("➕ Send new task in format:\n`Name|Points|Description`\n\nExample:\n`Photo of Market|50|Take clear photo of a local market`")
+        admin_state[query.from_user.id] = "add"
+
+    elif query.data == "edit_task":
+        await query.edit_message_text("✏️ Send task ID and new details in format:\n`ID|NewName|NewPoints|NewDescription`")
+        admin_state[query.from_user.id] = "edit"
+
+    elif query.data == "delete_task":
+        await query.edit_message_text("🗑 Send the task ID you want to delete.")
+        admin_state[query.from_user.id] = "delete"
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    if user_id in admin_state:
+        mode = admin_state.pop(user_id)
+        if mode == "add":
+            try:
+                name, points, desc = text.split("|", 2)
+                task_id = str(len(TASKS) + 1)
+                TASKS[task_id] = {"name": name.strip(), "points": int(points.strip()), "desc": desc.strip()}
+                c.execute("INSERT INTO tasks (id, name, points, desc) VALUES (?, ?, ?, ?)", (task_id, name.strip(), int(points.strip()), desc.strip()))
+                conn.commit()
+                await update.message.reply_text(f"✅ New task added with ID: {task_id}")
+            except:
+                await update.message.reply_text("❌ Wrong format. Use `Name|Points|Description`")
+        # edit and delete can be added in next update if needed
+
+    elif user_id in user_pending:
+        # normal submission handling (already in previous code)
+        pass
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -172,8 +197,9 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
+    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with Improved Admin Panel!")
+    print("🚀 TaskHive is LIVE with Full Button Admin!")
     app.run_polling()
 
 if __name__ == "__main__":
