@@ -23,7 +23,6 @@ c.execute('''CREATE TABLE IF NOT EXISTS users (telegram_id INTEGER PRIMARY KEY, 
 c.execute('''CREATE TABLE IF NOT EXISTS submissions (id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_type TEXT, timestamp TEXT, file_path TEXT, text_answer TEXT)''')
 conn.commit()
 
-# Dynamic tasks (you can add/edit/delete)
 TASKS = {
     "1": {"name": "📷 Local Photo", "points": 40, "desc": "Take one clear photo of your surroundings."},
     "2": {"name": "🎙️ Voice Description", "points": 80, "desc": "Record 10-15 second voice note describing what you see."},
@@ -33,7 +32,6 @@ TASKS = {
 }
 
 user_pending = {}
-admin_state = {}   # For add/edit/delete flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -108,6 +106,20 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized.")
         return
 
+    c.execute("SELECT COUNT(*) FROM users")
+    total_users = c.fetchone()[0]
+
+    c.execute("SELECT COUNT(*) FROM submissions")
+    total_submissions = c.fetchone()[0]
+
+    files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
+    file_count = len(files)
+
+    text = f"🔧 **Admin Panel**\n\n"
+    text += f"👥 Total Users: **{total_users}**\n"
+    text += f"📤 Total Submissions: **{total_submissions}**\n"
+    text += f"📁 Files Uploaded: **{file_count}**\n\n"
+
     keyboard = [
         [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
         [InlineKeyboardButton("📊 Submissions Summary", callback_data="view_submissions")],
@@ -117,14 +129,27 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
-    await update.message.reply_text("🔧 **Admin Panel**", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
 
-# Callback handler for admin buttons
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    if query.data == "download_zip":
+    if query.data == "view_users":
+        c.execute("SELECT username, points FROM users ORDER BY points DESC")
+        rows = c.fetchall()
+        text = f"👥 Users & Points ({len(rows)} total)\n\n"
+        for row in rows:
+            text += f"• @{row[0]} → {row[1]} pts\n"
+        await query.edit_message_text(text)
+
+    elif query.data == "view_submissions":
+        c.execute("SELECT COUNT(*) FROM submissions")
+        total = c.fetchone()[0]
+        files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
+        await query.edit_message_text(f"📊 Submissions Summary\n\nTotal Submissions: {total}\nTotal Files: {files}")
+
+    elif query.data == "download_zip":
         files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
         if not files:
             await query.edit_message_text("No files yet.")
@@ -136,26 +161,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
         os.remove(zip_path)
 
-    elif query.data == "view_users":
-        c.execute("SELECT username, points FROM users ORDER BY points DESC")
-        rows = c.fetchall()
-        text = "👥 Users & Points:\n\n"
-        for row in rows:
-            text += f"• @{row[0]} → {row[1]} pts\n"
-        await query.edit_message_text(text)
-
-    elif query.data == "view_submissions":
-        c.execute("SELECT u.username, s.task_type, s.text_answer, s.timestamp FROM submissions s JOIN users u ON s.user_id = u.telegram_id ORDER BY s.timestamp DESC")
-        rows = c.fetchall()
-        text = "📊 Recent Submissions:\n\n"
-        for row in rows[:15]:
-            answer = row[2] if row[2] else "Media File"
-            text += f"@{row[0]} - {row[1]}: {answer}\n"
-        await query.edit_message_text(text)
-
-    elif query.data == "add_task":
-        await query.edit_message_text("➕ Send new task in format:\n`Name|Points|Description`\n\nExample:\n`Photo of Market|50|Take clear photo of a local market`")
-        admin_state[query.from_user.id] = "add"
+    elif query.data in ["add_task", "edit_task", "delete_task"]:
+        await query.edit_message_text("This feature is coming in the next update. For now use /admin to see the panel.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
