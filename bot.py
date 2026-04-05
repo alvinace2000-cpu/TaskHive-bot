@@ -101,24 +101,24 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pts = result[0] if result else 0
     await update.message.reply_text(f"💰 Your current points: **{pts}**")
 
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "🛠 TaskHive Commands:\n"
+        "/start - Welcome message\n"
+        "/tasks - See available tasks\n"
+        "/points - Check your points\n"
+        "/referral - Get your referral link\n"
+        "/help - This message\n\n"
+        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
+    )
+
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
         return
-
-    c.execute("SELECT COUNT(*) FROM users")
-    total_users = c.fetchone()[0]
-
-    c.execute("SELECT COUNT(*) FROM submissions")
-    total_submissions = c.fetchone()[0]
-
-    files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
-    file_count = len(files)
-
-    text = f"🔧 **Admin Panel**\n\n"
-    text += f"👥 Total Users: **{total_users}**\n"
-    text += f"📤 Total Submissions: **{total_submissions}**\n"
-    text += f"📁 Files Uploaded: **{file_count}**\n\n"
 
     keyboard = [
         [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
@@ -129,7 +129,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text("🔧 **Admin Panel**", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -169,6 +169,8 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
+    app.add_handler(CommandHandler("referral", referral))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
