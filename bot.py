@@ -121,6 +121,9 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ You are not authorized.")
         return
 
+    # Show current tasks list for easy editing/deleting
+    task_list = "\n".join([f"ID {k}: {v['name']} ({v['points']} pts)" for k, v in TASKS.items()])
+
     keyboard = [
         [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
         [InlineKeyboardButton("📊 Submissions Summary", callback_data="view_submissions")],
@@ -130,7 +133,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
-    await update.message.reply_text("🔧 **Admin Panel**", reply_markup=InlineKeyboardMarkup(keyboard))
+    await update.message.reply_text(f"🔧 **Admin Panel**\n\nCurrent Tasks:\n{task_list}", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -163,26 +166,52 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(f"📊 Submissions Summary\nTotal Submissions: {total}\nTotal Files: {files}")
 
     elif query.data == "add_task":
-        await query.edit_message_text("➕ Send new task in format:\n`Name|Points|Description`\n\nExample:\n`Photo of Market|50|Take clear photo of a local market`")
+        await query.edit_message_text("➕ Send new task in format:\n`Name|Points|Description`")
         admin_state[query.from_user.id] = "add"
 
-    else:
-        await query.edit_message_text("This feature is coming soon.")
+    elif query.data == "edit_task":
+        await query.edit_message_text("✏️ Send in format:\n`ID|NewName|NewPoints|NewDescription`")
+        admin_state[query.from_user.id] = "edit"
+
+    elif query.data == "delete_task":
+        await query.edit_message_text("🗑 Send the Task ID you want to delete.")
+        admin_state[query.from_user.id] = "delete"
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    if user_id in admin_state and admin_state[user_id] == "add":
+    if user_id not in admin_state:
+        return
+
+    mode = admin_state.pop(user_id)
+
+    if mode == "add":
         try:
             name, points, desc = [x.strip() for x in text.split("|", 2)]
             task_id = str(len(TASKS) + 1)
             TASKS[task_id] = {"name": name, "points": int(points), "desc": desc}
-            await update.message.reply_text(f"✅ New task added with ID: {task_id}")
-            del admin_state[user_id]
+            await update.message.reply_text(f"✅ New task added!\nID: {task_id}")
         except:
             await update.message.reply_text("❌ Wrong format. Use `Name|Points|Description`")
-        return
+
+    elif mode == "edit":
+        try:
+            task_id, name, points, desc = [x.strip() for x in text.split("|", 3)]
+            if task_id in TASKS:
+                TASKS[task_id] = {"name": name, "points": int(points), "desc": desc}
+                await update.message.reply_text(f"✅ Task {task_id} updated!")
+            else:
+                await update.message.reply_text("❌ Task ID not found.")
+        except:
+            await update.message.reply_text("❌ Wrong format. Use `ID|NewName|NewPoints|NewDescription`")
+
+    elif mode == "delete":
+        if text in TASKS:
+            del TASKS[text]
+            await update.message.reply_text(f"✅ Task {text} deleted!")
+        else:
+            await update.message.reply_text("❌ Task ID not found.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -194,9 +223,9 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^/]"), message_handler))
+    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE!")
+    print("🚀 TaskHive is LIVE with FULL Admin Buttons!")
     app.run_polling()
 
 if __name__ == "__main__":
