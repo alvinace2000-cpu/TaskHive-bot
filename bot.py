@@ -32,7 +32,7 @@ TASKS = {
 }
 
 user_pending = {}
-admin_state = {}   # For Add New Task flow
+admin_state = {}
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -195,7 +195,7 @@ def main():
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE!")
+    print("🚀 TaskHive is LIVE with working admin buttons!")
     app.run_polling()
 
 if __name__ == "__main__":
