@@ -43,7 +43,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"👋 Welcome to TaskHive, @{username}!\nYou received **50 bonus points**!\n\nJoin channel: {CHANNEL_LINK}\nUse /tasks to start.")
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(f"{t['name']} — {t['points']} pts", callback_data=k)] for k, t in TASKS.items()]
+    keyboard = [[InlineKeyboardButton(f"{task['name']} — {task['points']} pts", callback_data=key)] for key, task in TASKS.items()]
     await update.message.reply_text("📋 Available Tasks", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -51,10 +51,12 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     task_id = query.data
     task = TASKS[task_id]
+
     c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
     if c.fetchone():
         await query.edit_message_text("❌ You have already completed this task.")
         return
+
     user_pending[query.from_user.id] = task_id
     await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your response now.")
 
@@ -82,24 +84,35 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
               (user_id, task_id, datetime.now().strftime("%Y-%m-%d %H:%M"), file_path, text_answer))
     c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
     conn.commit()
+
     await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
 
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
-    pts = c.fetchone()[0] if c.fetchone() else 0
+    result = c.fetchone()
+    pts = result[0] if result else 0
     await update.message.reply_text(f"💰 Your current points: **{pts}**")
 
 async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🛠 Commands:\n/start\n/tasks\n/points\n/referral\n/help\n\nJoin channel: " + CHANNEL_LINK)
+    await update.message.reply_text(
+        "🛠 TaskHive Commands:\n"
+        "/start - Welcome message\n"
+        "/tasks - See available tasks\n"
+        "/points - Check your points\n"
+        "/referral - Get your referral link\n"
+        "/help - This message\n\n"
+        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
+    )
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
         return
+
     task_list = "\n".join([f"ID {k}: {v['name']} ({v['points']} pts)" for k, v in TASKS.items()])
     keyboard = [
         [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
@@ -165,7 +178,7 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             name, points, desc = [x.strip() for x in text.split("|", 2)]
             task_id = str(len(TASKS) + 1)
             TASKS[task_id] = {"name": name, "points": int(points), "desc": desc}
-            await update.message.reply_text(f"✅ Task added! ID: {task_id}")
+            await update.message.reply_text(f"✅ New task added! ID: {task_id}")
         except:
             await update.message.reply_text("❌ Wrong format. Use `Name|Points|Description`")
     elif mode == "edit":
@@ -195,9 +208,9 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, message_handler))
+    app.add_handler(MessageHandler(filters.TEXT & filters.Regex(r"^[^/]"), message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE with FULL working admin!")
+    print("🚀 TaskHive is LIVE with FULL admin buttons!")
     app.run_polling()
 
 if __name__ == "__main__":
