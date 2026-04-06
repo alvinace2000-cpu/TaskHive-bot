@@ -32,7 +32,6 @@ TASKS = {
 }
 
 user_pending = {}
-admin_state = {}   # For add task flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -162,26 +161,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
         await query.edit_message_text(f"📊 Submissions Summary\nTotal Submissions: {total}\nTotal Files: {files}")
 
-    elif query.data == "add_task":
-        await query.edit_message_text("➕ Send new task in format:\n`Name|Points|Description`\n\nExample:\n`Photo of Market|50|Take clear photo of a local market`")
-        admin_state[query.from_user.id] = "add"
-
     else:
         await query.edit_message_text("This feature is coming soon.")
-
-async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text.strip()
-
-    if user_id in admin_state and admin_state[user_id] == "add":
-        try:
-            name, points, desc = [x.strip() for x in text.split("|", 2)]
-            task_id = str(len(TASKS) + 1)
-            TASKS[task_id] = {"name": name, "points": int(points), "desc": desc}
-            await update.message.reply_text(f"✅ New task added with ID: {task_id}")
-            del admin_state[user_id]
-        except:
-            await update.message.reply_text("❌ Wrong format. Use `Name|Points|Description`")
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -193,10 +174,9 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
     print("🚀 TaskHive is LIVE!")
     app.run_polling()
 
 if __name__ == "__main__":
-    main()
+    main()p
