@@ -50,7 +50,9 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     task_id = query.data
-    task = TASKS[task_id]
+    task = TASKS.get(task_id)
+    if not task:
+        return
 
     c.execute("SELECT * FROM submissions WHERE user_id = ? AND task_type = ?", (query.from_user.id, task_id))
     if c.fetchone():
@@ -124,6 +126,7 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text(f"🔧 **Admin Panel**\n\nCurrent Tasks:\n{task_list}", reply_markup=InlineKeyboardMarkup(keyboard))
 
+# Admin callback
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -184,16 +187,21 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def main():
     app = Application.builder().token(TOKEN).build()
+    
+    # Important: Register handlers in correct order
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
     app.add_handler(CommandHandler("referral", referral))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin))
-    app.add_handler(CallbackQueryHandler(callback_handler))
-    app.add_handler(CallbackQueryHandler(button_handler))
+    
+    app.add_handler(CallbackQueryHandler(callback_handler))   # Admin buttons
+    app.add_handler(CallbackQueryHandler(button_handler))     # Task buttons
+    
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
+    
     print("🚀 TaskHive is LIVE!")
     app.run_polling()
 
