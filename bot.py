@@ -181,22 +181,6 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(f"✅ New task added! ID: {task_id}")
         except:
             await update.message.reply_text("❌ Wrong format. Use `Name|Points|Description`")
-    elif mode == "edit":
-        try:
-            task_id, name, points, desc = [x.strip() for x in text.split("|", 3)]
-            if task_id in TASKS:
-                TASKS[task_id] = {"name": name, "points": int(points), "desc": desc}
-                await update.message.reply_text(f"✅ Task {task_id} edited!")
-            else:
-                await update.message.reply_text("❌ Task ID not found.")
-        except:
-            await update.message.reply_text("❌ Wrong format. Use `ID|NewName|NewPoints|NewDescription`")
-    elif mode == "delete":
-        if text in TASKS:
-            del TASKS[text]
-            await update.message.reply_text(f"✅ Task {text} deleted!")
-        else:
-            await update.message.reply_text("❌ Task ID not found.")
 
 def main():
     app = Application.builder().token(TOKEN).build()
