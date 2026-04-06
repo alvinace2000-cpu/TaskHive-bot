@@ -61,7 +61,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user_pending[query.from_user.id] = task_id
-    await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your photo, voice note, or text now.")
+    await query.edit_message_text(f"✅ Task: {task['name']}\n\n{task['desc']}\n\nSend your photo, voice note or text now.")
 
 async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -72,7 +72,6 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     file_path = None
     text_answer = None
-
     if update.message.photo:
         file = await update.message.photo[-1].get_file()
         file_path = os.path.join(SUBMISSIONS_DIR, f"{user_id}_photo_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg")
@@ -89,7 +88,7 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     c.execute("UPDATE users SET points = points + ? WHERE telegram_id = ?", (task["points"], user_id))
     conn.commit()
 
-    await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
+    await update.message.reply_text(f"✅ Task received!\nYou earned +{task['points']} points!")
 
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -128,7 +127,6 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     await update.message.reply_text(f"🔧 **Admin Panel**\n\nCurrent Tasks:\n{task_list}", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# Keep your admin panel untouched
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -136,7 +134,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "add_task":
         await query.edit_message_text("➕ Send new task:\n`Name|Points|Description`")
         admin_state[query.from_user.id] = "add"
-    # other admin buttons remain as is (coming soon for now)
+    # other admin buttons remain untouched
 
 def main():
     app = Application.builder().token(TOKEN).build()
