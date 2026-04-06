@@ -1,5 +1,6 @@
 import sqlite3
 import os
+import zipfile
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes, CallbackQueryHandler
@@ -87,21 +88,32 @@ async def handle_submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await update.message.reply_text(f"✅ Task completed!\nYou earned +{task['points']} points!")
 
+async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    c.execute("SELECT points FROM users WHERE telegram_id = ?", (user_id,))
+    result = c.fetchone()
+    pts = result[0] if result else 0
+    await update.message.reply_text(f"💰 Your current points: **{pts}**")
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛠 TaskHive Commands:\n"
-        "/start - Welcome\n"
-        "/tasks - See tasks\n"
-        "/points - Check points\n"
-        "/referral - Referral link\n"
+        "/start - Welcome message\n"
+        "/tasks - See available tasks\n"
+        "/points - Check your points\n"
+        "/referral - Get your referral link\n"
         "/help - This message\n\n"
-        "📢 Join channel: " + CHANNEL_LINK
+        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
     )
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("❌ Not authorized.")
+        await update.message.reply_text("❌ You are not authorized.")
         return
+
     task_list = "\n".join([f"ID {k}: {v['name']} ({v['points']} pts)" for k, v in TASKS.items()])
     keyboard = [
         [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
@@ -109,9 +121,67 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
         [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
         [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")],
-        [InlineKeyboardButton("📥 Download ZIP", callback_data="download_zip")]
+        [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
     await update.message.reply_text(f"🔧 **Admin Panel**\n\nCurrent Tasks:\n{task_list}", reply_markup=InlineKeyboardMarkup(keyboard))
+
+async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data == "download_zip":
+        files = [f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))]
+        if not files:
+            await query.edit_message_text("No files yet.")
+            return
+        zip_path = os.path.join(DATA_DIR, "TaskHive_All_Files.zip")
+        with zipfile.ZipFile(zip_path, 'w') as z:
+            for f in files:
+                z.write(os.path.join(SUBMISSIONS_DIR, f), f)
+        await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
+        os.remove(zip_path)
+
+    elif data == "view_users":
+        c.execute("SELECT username, points FROM users ORDER BY points DESC")
+        rows = c.fetchall()
+        text = f"👥 Users & Points ({len(rows)} total)\n\n"
+        for row in rows:
+            text += f"• @{row[0]} → {row[1]} pts\n"
+        await query.edit_message_text(text)
+
+    elif data == "view_submissions":
+        c.execute("SELECT COUNT(*) FROM submissions")
+        total = c.fetchone()[0]
+        files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
+        await query.edit_message_text(f"📊 Submissions Summary\nTotal Submissions: {total}\nTotal Files: {files}")
+
+    elif data == "add_task":
+        await query.edit_message_text("➕ Send new task:\n`Name|Points|Description`")
+        admin_state[query.from_user.id] = "add"
+
+    elif data == "edit_task":
+        await query.edit_message_text("✏️ Send:\n`ID|NewName|NewPoints|NewDescription`")
+        admin_state[query.from_user.id] = "edit"
+
+    elif data == "delete_task":
+        await query.edit_message_text("🗑 Send the Task ID to delete.")
+        admin_state[query.from_user.id] = "delete"
+
+async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+    if user_id not in admin_state:
+        return
+    mode = admin_state.pop(user_id)
+    if mode == "add":
+        try:
+            name, points, desc = [x.strip() for x in text.split("|", 2)]
+            task_id = str(len(TASKS) + 1)
+            TASKS[task_id] = {"name": name, "points": int(points), "desc": desc}
+            await update.message.reply_text(f"✅ New task added! ID: {task_id}")
+        except:
+            await update.message.reply_text("❌ Wrong format. Use `Name|Points|Description`")
 
 def main():
     app = Application.builder().token(TOKEN).build()
@@ -123,7 +193,7 @@ def main():
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, lambda u, c: None))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, message_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
     print("🚀 TaskHive is LIVE!")
     app.run_polling()
