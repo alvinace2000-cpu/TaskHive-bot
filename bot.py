@@ -32,6 +32,7 @@ TASKS = {
 }
 
 user_pending = {}
+admin_state = {}  # For add/edit/delete flow
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
@@ -101,31 +102,15 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pts = result[0] if result else 0
     await update.message.reply_text(f"💰 Your current points: **{pts}**")
 
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🔗 Your referral link:\nhttps://t.me/{BOT_USERNAME}?start=ref_{update.effective_user.id}\n\nShare and earn 150 points per friend!")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🛠 TaskHive Commands:\n"
-        "/start - Welcome message\n"
-        "/tasks - See available tasks\n"
-        "/points - Check your points\n"
-        "/referral - Get your referral link\n"
-        "/help - This message\n\n"
-        "📢 Join our Announcement Channel:\n" + CHANNEL_LINK
-    )
-
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         await update.message.reply_text("❌ You are not authorized.")
         return
 
     keyboard = [
-        [InlineKeyboardButton("👥 Users & Points", callback_data="view_users")],
-        [InlineKeyboardButton("📊 Submissions Summary", callback_data="view_submissions")],
-        [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
-        [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
-        [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")],
+        [InlineKeyboardButton("👥 Users & Points", callback_data="admin_users")],
+        [InlineKeyboardButton("📊 Submissions Summary", callback_data="admin_summary")],
+        [InlineKeyboardButton("📋 Manage Tasks", callback_data="admin_tasks")],
         [InlineKeyboardButton("📥 Download All Files (ZIP)", callback_data="download_zip")]
     ]
 
@@ -147,36 +132,39 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.message.reply_document(open(zip_path, 'rb'), filename="TaskHive_All_Files.zip")
         os.remove(zip_path)
 
-    elif query.data == "view_users":
+    elif query.data == "admin_users":
         c.execute("SELECT username, points FROM users ORDER BY points DESC")
         rows = c.fetchall()
-        text = f"👥 Users & Points ({len(rows)} total)\n\n"
+        text = "👥 Users & Points:\n\n"
         for row in rows:
             text += f"• @{row[0]} → {row[1]} pts\n"
         await query.edit_message_text(text)
 
-    elif query.data == "view_submissions":
+    elif query.data == "admin_summary":
         c.execute("SELECT COUNT(*) FROM submissions")
-        total = c.fetchone()[0]
+        subs = c.fetchone()[0]
         files = len([f for f in os.listdir(SUBMISSIONS_DIR) if os.path.isfile(os.path.join(SUBMISSIONS_DIR, f))])
-        await query.edit_message_text(f"📊 Submissions Summary\nTotal Submissions: {total}\nTotal Files: {files}")
+        await query.edit_message_text(f"📊 Summary\nTotal Submissions: {subs}\nTotal Files: {files}")
 
-    else:
-        await query.edit_message_text("This feature is coming soon.")
+    elif query.data == "admin_tasks":
+        keyboard = [
+            [InlineKeyboardButton("➕ Add New Task", callback_data="add_task")],
+            [InlineKeyboardButton("✏️ Edit Task", callback_data="edit_task")],
+            [InlineKeyboardButton("🗑 Delete Task", callback_data="delete_task")]
+        ]
+        await query.edit_message_text("📋 Manage Tasks", reply_markup=InlineKeyboardMarkup(keyboard))
 
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
-    app.add_handler(CommandHandler("referral", referral))
-    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin))
     app.add_handler(CallbackQueryHandler(callback_handler))
     app.add_handler(CallbackQueryHandler(button_handler))
     app.add_handler(MessageHandler(filters.ALL, handle_submission))
-    print("🚀 TaskHive is LIVE!")
+    print("🚀 TaskHive is LIVE with Full Button Admin Panel!")
     app.run_polling()
 
 if __name__ == "__main__":
-    main()p
+    main()
