@@ -1,8 +1,7 @@
 import sqlite3
 import zipfile
-import os
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import Application, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram import Update
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 TOKEN = "YOUR_BOT_TOKEN"
 ADMIN_ID = 8728887265
@@ -11,25 +10,34 @@ MIN_WITHDRAW = 1500
 conn = sqlite3.connect("taskhive.db", check_same_thread=False)
 cur = conn.cursor()
 
-cur.execute("""CREATE TABLE IF NOT EXISTS users(
+cur.execute("""
+CREATE TABLE IF NOT EXISTS users(
 id INTEGER PRIMARY KEY,
 username TEXT,
 points INTEGER DEFAULT 0,
-ref INTEGER)""")
+ref INTEGER
+)
+""")
 
-cur.execute("""CREATE TABLE IF NOT EXISTS tasks(
+cur.execute("""
+CREATE TABLE IF NOT EXISTS tasks(
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 title TEXT,
-reward INTEGER,
-type TEXT)""")
+reward INTEGER
+)
+""")
 
-cur.execute("""CREATE TABLE IF NOT EXISTS submissions(
+cur.execute("""
+CREATE TABLE IF NOT EXISTS submissions(
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 user_id INTEGER,
 task_id INTEGER,
-text TEXT)""")
+text TEXT
+)
+""")
 
 conn.commit()
+
 
 # START
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -46,36 +54,44 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = cur.fetchone()
 
     if not data:
-        cur.execute("INSERT INTO users(id,username,points,ref) VALUES(?,?,?,?)",
-                    (uid, username, 0, ref))
+
+        cur.execute(
+            "INSERT INTO users(id,username,points,ref) VALUES(?,?,?,?)",
+            (uid, username, 0, ref),
+        )
         conn.commit()
 
         if ref:
-            cur.execute("UPDATE users SET points = points + 200 WHERE id=?", (ref,))
+            cur.execute(
+                "UPDATE users SET points = points + 200 WHERE id=?",
+                (ref,),
+            )
             conn.commit()
 
-        text = f"""
-🔥 Welcome to TaskHive!
+        text = """
+🔥 Welcome to TaskHive
 
 Earn points by completing AI training tasks.
 
-Use:
-/tasks – view tasks
-/points – check balance
-/help – help guide
+Commands:
+/tasks
+/points
+/help
 
-Join announcements:
+Announcements:
 https://t.me/+6WtlEwqjwccxOTVk
 """
 
     else:
+
         points = data[2]
+
         text = f"""
-Welcome back {username} 👋
+Welcome back {username}
 
 Your points: {points}
 
-Use /tasks to start earning more.
+Use /tasks to earn more.
 """
 
     await update.message.reply_text(text)
@@ -87,11 +103,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = """
 TaskHive Help
 
-/tasks – view tasks
-/submit – submit task
-/points – check points
-/refer – get referral link
-/withdraw – withdraw points
+/tasks
+/submit
+/points
+/refer
+/withdraw
 
 Announcements:
 https://t.me/+6WtlEwqjwccxOTVk
@@ -104,6 +120,7 @@ https://t.me/+6WtlEwqjwccxOTVk
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     uid = update.effective_user.id
+
     cur.execute("SELECT points FROM users WHERE id=?", (uid,))
     p = cur.fetchone()[0]
 
@@ -125,7 +142,7 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     for r in rows:
         text += f"Task {r[0]}: {r[1]}\nReward: {r[2]} points\n\n"
 
-    text += "Submit using: /submit TASK_ID your_answer"
+    text += "Submit using:\n/submit TASK_ID answer"
 
     await update.message.reply_text(text)
 
@@ -139,22 +156,30 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = int(context.args[0])
         answer = " ".join(context.args[1:])
     except:
-        await update.message.reply_text("Usage: /submit TASK_ID answer")
+        await update.message.reply_text(
+            "Usage:\n/submit TASK_ID your_answer"
+        )
         return
 
-    cur.execute("INSERT INTO submissions(user_id,task_id,text) VALUES(?,?,?)",
-                (uid, task_id, answer))
+    cur.execute(
+        "INSERT INTO submissions(user_id,task_id,text) VALUES(?,?,?)",
+        (uid, task_id, answer),
+    )
 
     cur.execute("SELECT reward FROM tasks WHERE id=?", (task_id,))
     reward = cur.fetchone()
 
     if reward:
-        cur.execute("UPDATE users SET points = points + ? WHERE id=?",
-                    (reward[0], uid))
+        cur.execute(
+            "UPDATE users SET points = points + ? WHERE id=?",
+            (reward[0], uid),
+        )
 
     conn.commit()
 
-    await update.message.reply_text("Submission received! Points added.")
+    await update.message.reply_text(
+        "Submission received! Points added."
+    )
 
 
 # REFERRAL
@@ -163,7 +188,9 @@ async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     link = f"https://t.me/Task_Hive?start={uid}"
 
-    await update.message.reply_text(f"Invite friends:\n{link}\n\nEarn 200 points per referral.")
+    await update.message.reply_text(
+        f"Invite friends:\n{link}\n\nEarn 200 points per referral"
+    )
 
 
 # WITHDRAW
@@ -175,15 +202,18 @@ async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     p = cur.fetchone()[0]
 
     if p < MIN_WITHDRAW:
+
         await update.message.reply_text(
-            f"Minimum withdrawal is {MIN_WITHDRAW} points.\nYour balance: {p}"
+            f"Minimum withdrawal: {MIN_WITHDRAW}\nYour balance: {p}"
         )
         return
 
-    await update.message.reply_text("Withdrawal request received. Admin will contact you.")
+    await update.message.reply_text(
+        "Withdrawal request received. Admin will contact you."
+    )
 
 
-# ADMIN PANEL
+# ADMIN
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
@@ -209,18 +239,26 @@ async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
+
         data = " ".join(context.args).split("|")
+
         title = data[0].strip()
         reward = int(data[1].strip())
 
-        cur.execute("INSERT INTO tasks(title,reward,type) VALUES(?,?,?)",
-                    (title, reward, "survey"))
+        cur.execute(
+            "INSERT INTO tasks(title,reward) VALUES(?,?)",
+            (title, reward),
+        )
+
         conn.commit()
 
         await update.message.reply_text("Task added!")
 
     except:
-        await update.message.reply_text("Format:\n/addtask Task title | reward")
+
+        await update.message.reply_text(
+            "Format:\n/addtask Task name | reward"
+        )
 
 
 # DELETE TASK
@@ -234,7 +272,7 @@ async def deletetask(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cur.execute("DELETE FROM tasks WHERE id=?", (tid,))
     conn.commit()
 
-    await update.message.reply_text("Task deleted.")
+    await update.message.reply_text("Task deleted")
 
 
 # USERS
@@ -266,7 +304,7 @@ async def submissions(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 
-# EXPORT ZIP
+# EXPORT
 async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
@@ -276,6 +314,7 @@ async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rows = cur.fetchall()
 
     with open("submissions.txt", "w") as f:
+
         for r in rows:
             f.write(str(r) + "\n")
 
@@ -283,9 +322,12 @@ async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
     zipf.write("submissions.txt")
     zipf.close()
 
-    await update.message.reply_document(open("submissions.zip", "rb"))
+    await update.message.reply_document(
+        document=open("submissions.zip", "rb")
+    )
 
 
+# MAIN
 def main():
 
     app = Application.builder().token(TOKEN).build()
@@ -305,7 +347,6 @@ def main():
     app.add_handler(CommandHandler("submissions", submissions))
     app.add_handler(CommandHandler("export", export))
 
-    print("TaskHive Enterprise running...")
     app.run_polling()
 
 
