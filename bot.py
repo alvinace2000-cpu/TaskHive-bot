@@ -20,16 +20,15 @@ from telegram.ext import (
 
 TOKEN = os.getenv("TOKEN")
 
-ADMIN_ID = 8728887265
 BOT_USERNAME = "TaskHiveDataBot"
+ADMIN_ID = 8728887265
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
 DATA_DIR = "data"
-SUBMISSIONS_DIR = os.path.join(DATA_DIR, "submissions")
+FILES_DIR = os.path.join(DATA_DIR, "submissions")
 
-os.makedirs(SUBMISSIONS_DIR, exist_ok=True)
+os.makedirs(FILES_DIR, exist_ok=True)
 
-# DATABASE
 conn = sqlite3.connect(os.path.join(DATA_DIR, "taskhive.db"), check_same_thread=False)
 c = conn.cursor()
 
@@ -38,7 +37,16 @@ CREATE TABLE IF NOT EXISTS users(
 telegram_id INTEGER PRIMARY KEY,
 username TEXT,
 points INTEGER DEFAULT 0,
-referrer INTEGER
+ref_by INTEGER
+)
+""")
+
+c.execute("""
+CREATE TABLE IF NOT EXISTS tasks(
+id INTEGER PRIMARY KEY AUTOINCREMENT,
+name TEXT,
+description TEXT,
+points INTEGER
 )
 """)
 
@@ -46,49 +54,32 @@ c.execute("""
 CREATE TABLE IF NOT EXISTS submissions(
 id INTEGER PRIMARY KEY AUTOINCREMENT,
 user_id INTEGER,
-task_id TEXT,
+task_id INTEGER,
+timestamp TEXT,
 file_path TEXT,
-text_answer TEXT,
-status TEXT,
-timestamp TEXT
+text_answer TEXT
 )
 """)
 
 conn.commit()
 
-# TASK LIST
-TASKS = {
-    "1": {
-        "name": "📷 Local Photo",
-        "points": 40,
-        "desc": "Take a photo of your surroundings"
-    },
-    "2": {
-        "name": "🎙 Voice Description",
-        "points": 80,
-        "desc": "Send 10 second voice describing your area"
-    },
-    "3": {
-        "name": "📝 Price Survey",
-        "points": 50,
-        "desc": "Tell us prices of rice, sugar, bread"
-    }
-}
-
 user_pending = {}
 
-# START
+# ------------------------------------------------
+# START COMMAND
+# ------------------------------------------------
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.effective_user
     user_id = user.id
-    username = user.username or f"user{user_id}"
+    username = user.username or f"user_{user_id}"
 
-    referrer = None
+    ref = None
 
     if context.args:
         if "ref_" in context.args[0]:
-            referrer = int(context.args[0].split("_")[1])
+            ref = int(context.args[0].split("_")[1])
 
     c.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,))
     exists = c.fetchone()
@@ -96,66 +87,104 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not exists:
 
         c.execute(
-            "INSERT INTO users VALUES (?,?,?,?)",
-            (user_id, username, 50, referrer)
+            "INSERT INTO users (telegram_id, username, points, ref_by) VALUES (?,?,?,?)",
+            (user_id, username, 50, ref)
         )
 
         conn.commit()
 
-        if referrer:
-            c.execute(
-                "UPDATE users SET points = points + 150 WHERE telegram_id=?",
-                (referrer,)
-            )
+        if ref and ref != user_id:
+            c.execute("UPDATE users SET points = points + 150 WHERE telegram_id=?", (ref,))
             conn.commit()
 
         await update.message.reply_text(
-            f"👋 Welcome {username}\n\n"
-            f"You received 50 bonus points\n\n"
-            f"Use /tasks to start"
+            f"""
+👋 Welcome to TaskHive!
+
+TaskHive lets you earn points by completing simple tasks like:
+
+📷 Taking photos
+🎙 Recording voice notes
+📝 Completing surveys
+
+🎁 You received 50 bonus points!
+
+📢 Join our channel:
+{CHANNEL_LINK}
+
+Use /tasks to start earning!
+"""
         )
 
     else:
 
+        c.execute("SELECT points FROM users WHERE telegram_id=?", (user_id,))
+        points = c.fetchone()[0]
+
         await update.message.reply_text(
-            "Welcome back!\nUse /tasks"
+            f"""
+👋 Welcome back @{username}
+
+💰 Your points: {points}
+
+Use /tasks to continue earning.
+"""
         )
 
+
+# ------------------------------------------------
 # TASK LIST
+# ------------------------------------------------
+
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    c.execute("SELECT * FROM tasks")
+    rows = c.fetchall()
 
     keyboard = []
 
-    for key, task in TASKS.items():
-
-        keyboard.append([
-            InlineKeyboardButton(
-                f"{task['name']} — {task['points']} pts",
-                callback_data=f"task_{key}"
-            )
-        ])
+    for t in rows:
+        keyboard.append(
+            [InlineKeyboardButton(f"{t[1]} — {t[3]} pts", callback_data=f"task_{t[0]}")]
+        )
 
     await update.message.reply_text(
         "📋 Available Tasks",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# TASK BUTTON
+
+# ------------------------------------------------
+# TASK SELECT
+# ------------------------------------------------
+
 async def task_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
 
-    task_id = query.data.split("_")[1]
-    task = TASKS[task_id]
+    task_id = int(query.data.split("_")[1])
+
+    c.execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+    task = c.fetchone()
 
     user_pending[query.from_user.id] = task_id
 
     await query.edit_message_text(
-        f"{task['name']}\n\n{task['desc']}\n\nSend submission now"
+        f"""
+✅ {task[1]}
+
+{task[2]}
+
+Send your answer now.
+"""
     )
 
+
+# ------------------------------------------------
 # SUBMISSION HANDLER
+# ------------------------------------------------
+
 async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = update.effective_user.id
@@ -165,6 +194,9 @@ async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     task_id = user_pending.pop(user_id)
 
+    c.execute("SELECT points FROM tasks WHERE id=?", (task_id,))
+    points = c.fetchone()[0]
+
     file_path = None
     text_answer = None
 
@@ -173,7 +205,7 @@ async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await update.message.photo[-1].get_file()
 
         file_path = os.path.join(
-            SUBMISSIONS_DIR,
+            FILES_DIR,
             f"{user_id}_{datetime.now().timestamp()}.jpg"
         )
 
@@ -184,7 +216,7 @@ async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file = await update.message.voice.get_file()
 
         file_path = os.path.join(
-            SUBMISSIONS_DIR,
+            FILES_DIR,
             f"{user_id}_{datetime.now().timestamp()}.ogg"
         )
 
@@ -195,35 +227,99 @@ async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text_answer = update.message.text
 
     c.execute(
-        """INSERT INTO submissions
-        (user_id,task_id,file_path,text_answer,status,timestamp)
-        VALUES (?,?,?,?,?,?)""",
+        "INSERT INTO submissions (user_id, task_id, timestamp, file_path, text_answer) VALUES (?,?,?,?,?)",
         (
             user_id,
             task_id,
+            datetime.now().strftime("%Y-%m-%d %H:%M"),
             file_path,
-            text_answer,
-            "pending",
-            datetime.now().strftime("%Y-%m-%d %H:%M")
+            text_answer
         )
+    )
+
+    c.execute(
+        "UPDATE users SET points = points + ? WHERE telegram_id=?",
+        (points, user_id)
     )
 
     conn.commit()
 
     await update.message.reply_text(
-        "✅ Submission received!\nWaiting admin approval."
+        f"✅ Submission received!\nYou earned {points} points."
     )
 
+
+# ------------------------------------------------
+# POINTS
+# ------------------------------------------------
+
+async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    c.execute("SELECT points FROM users WHERE telegram_id=?", (user_id,))
+    pts = c.fetchone()[0]
+
+    await update.message.reply_text(f"💰 Your points: {pts}")
+
+
+# ------------------------------------------------
+# REFERRAL
+# ------------------------------------------------
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    await update.message.reply_text(
+        f"""
+Invite friends and earn 150 points!
+
+Your link:
+
+https://t.me/{BOT_USERNAME}?start=ref_{user_id}
+"""
+    )
+
+
+# ------------------------------------------------
+# HELP
+# ------------------------------------------------
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    await update.message.reply_text(
+        f"""
+TaskHive Commands
+
+/start
+/tasks
+/points
+/referral
+/help
+
+📢 Channel:
+{CHANNEL_LINK}
+"""
+    )
+
+
+# ------------------------------------------------
 # ADMIN PANEL
+# ------------------------------------------------
+
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
         return
 
     keyboard = [
+
         [InlineKeyboardButton("👥 Users", callback_data="users")],
-        [InlineKeyboardButton("📥 Submissions", callback_data="subs")],
-        [InlineKeyboardButton("📦 Download ZIP", callback_data="zip")]
+        [InlineKeyboardButton("📊 Submissions", callback_data="subs")],
+        [InlineKeyboardButton("➕ Add Task", callback_data="addtask")],
+        [InlineKeyboardButton("📥 Download Files", callback_data="zip")]
+
     ]
 
     await update.message.reply_text(
@@ -231,109 +327,53 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ADMIN CALLBACK
-async def admin_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+# ------------------------------------------------
+# ADMIN CALLBACKS
+# ------------------------------------------------
+
+async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     query = update.callback_query
     await query.answer()
 
-    data = query.data
+    if query.data == "users":
 
-    if data == "users":
-
-        c.execute("SELECT username,points FROM users ORDER BY points DESC")
-
+        c.execute("SELECT username, points FROM users ORDER BY points DESC")
         rows = c.fetchall()
 
-        text = "Leaderboard\n\n"
+        text = f"Total Users: {len(rows)}\n\n"
 
         for r in rows:
-
-            text += f"{r[0]} — {r[1]} pts\n"
+            text += f"@{r[0]} — {r[1]} pts\n"
 
         await query.edit_message_text(text)
 
-    elif data == "subs":
+    if query.data == "subs":
 
-        c.execute(
-            "SELECT id,user_id,task_id FROM submissions WHERE status='pending'"
-        )
+        c.execute("SELECT COUNT(*) FROM submissions")
+        total = c.fetchone()[0]
 
-        rows = c.fetchall()
+        await query.edit_message_text(f"Total submissions: {total}")
 
-        text = "Pending Submissions\n\n"
+    if query.data == "zip":
 
-        for r in rows:
+        zip_path = os.path.join(DATA_DIR, "files.zip")
 
-            text += f"ID {r[0]} | User {r[1]} | Task {r[2]}\n"
+        with zipfile.ZipFile(zip_path, 'w') as z:
 
-        await query.edit_message_text(text)
+            for f in os.listdir(FILES_DIR):
+                z.write(os.path.join(FILES_DIR, f), f)
 
-    elif data == "zip":
+        await query.message.reply_document(open(zip_path, "rb"))
 
-        zip_path = os.path.join(DATA_DIR, "submissions.zip")
+        os.remove(zip_path)
 
-        with zipfile.ZipFile(zip_path, "w") as z:
 
-            for f in os.listdir(SUBMISSIONS_DIR):
-
-                z.write(os.path.join(SUBMISSIONS_DIR, f), f)
-
-        await query.message.reply_document(
-            open(zip_path, "rb"),
-            filename="submissions.zip"
-        )
-
-# POINTS
-async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.effective_user.id
-
-    c.execute(
-        "SELECT points FROM users WHERE telegram_id=?",
-        (user_id,)
-    )
-
-    pts = c.fetchone()
-
-    if pts:
-        pts = pts[0]
-    else:
-        pts = 0
-
-    await update.message.reply_text(
-        f"💰 Points: {pts}"
-    )
-
-# LEADERBOARD
-async def leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    c.execute(
-        "SELECT username,points FROM users ORDER BY points DESC LIMIT 10"
-    )
-
-    rows = c.fetchall()
-
-    text = "🏆 Top Users\n\n"
-
-    for i, r in enumerate(rows):
-
-        text += f"{i+1}. {r[0]} — {r[1]} pts\n"
-
-    await update.message.reply_text(text)
-
-# REFERRAL
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    user_id = update.effective_user.id
-
-    link = f"https://t.me/{BOT_USERNAME}?start=ref_{user_id}"
-
-    await update.message.reply_text(
-        f"Invite friends and earn 150 pts\n\n{link}"
-    )
-
+# ------------------------------------------------
 # MAIN
+# ------------------------------------------------
+
 def main():
 
     app = Application.builder().token(TOKEN).build()
@@ -341,25 +381,19 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("tasks", tasks))
     app.add_handler(CommandHandler("points", points))
-    app.add_handler(CommandHandler("leaderboard", leaderboard))
     app.add_handler(CommandHandler("referral", referral))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("admin", admin))
 
-    app.add_handler(
-        CallbackQueryHandler(task_button, pattern="task_")
-    )
+    app.add_handler(CallbackQueryHandler(task_button, pattern="task_"))
+    app.add_handler(CallbackQueryHandler(admin_buttons))
 
-    app.add_handler(
-        CallbackQueryHandler(admin_callback)
-    )
+    app.add_handler(MessageHandler(filters.TEXT | filters.PHOTO | filters.VOICE, submission))
 
-    app.add_handler(
-        MessageHandler(filters.ALL, submission)
-    )
-
-    print("BOT RUNNING")
+    print("Bot running...")
 
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
