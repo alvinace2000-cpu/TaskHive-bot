@@ -127,6 +127,16 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "You earned 40 points."
     )
 
+async def refer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    user_id = update.effective_user.id
+
+    referral_link = f"https://t.me/Task_Hive_bot?start={user_id}"
+
+    await update.message.reply_text(
+        f"👥 Your referral link:\n\n{referral_link}\n\n"
+        "Invite friends and earn 100 points for each signup."
+    )
 
 # MAIN
 def main():
