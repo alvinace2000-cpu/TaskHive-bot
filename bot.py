@@ -29,16 +29,21 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = user.id
     username = user.username if user.username else f"user{user_id}"
 
-    cursor.execute("SELECT points FROM users WHERE telegram_id=?", (user_id,))
+    # referral id
+    referrer = None
+    if context.args:
+        referrer = context.args[0]
+
+    cursor.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,))
     data = cursor.fetchone()
 
     if data:
-        points = data[0]
+        points = data[2]
 
         await update.message.reply_text(
             f"👋 Welcome back @{username}\n\n"
-            f"💰 Your points: {points}\n\n"
-            f"Use /tasks to earn more."
+            f"💰 Points: {points}\n\n"
+            "Use /tasks to earn more."
         )
 
     else:
@@ -47,14 +52,22 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "INSERT INTO users (telegram_id,username,points) VALUES (?,?,?)",
             (user_id, username, 50),
         )
-
         conn.commit()
 
+        # reward referrer
+        if referrer and int(referrer) != user_id:
+
+            cursor.execute(
+                "UPDATE users SET points = points + 100 WHERE telegram_id=?",
+                (referrer,),
+            )
+            conn.commit()
+
         await update.message.reply_text(
-            "👋 Welcome to TaskHive!\n\n"
-            "Earn points by completing simple tasks that help train AI.\n\n"
-            f"Join announcements:\n{CHANNEL_LINK}\n\n"
-            "Use /tasks to begin."
+            "🎉 Welcome to TaskHive!\n\n"
+            "Earn points by completing tasks.\n\n"
+            f"Join channel:\n{CHANNEL_LINK}\n\n"
+            "Use /tasks to start."
         )
 
 
