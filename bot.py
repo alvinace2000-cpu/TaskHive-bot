@@ -1,192 +1,347 @@
-TaskHive Telegram Bot (Advanced)
+TaskHive PRO Telegram Bot
 
-Features: tasks, referrals, withdrawals, admin panel, submissions
+Python 3.10+
 
-import os import sqlite3 import zipfile from datetime import datetime from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup from telegram.ext import ( ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters, CallbackQueryHandler )
+python-telegram-bot v20
 
-TOKEN = os.getenv("TOKEN") ADMIN_ID = 8728887265 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk" MIN_WITHDRAW = 1500
+import os import sqlite3 import zipfile from datetime import datetime from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup from telegram.ext import ( Application, CommandHandler, MessageHandler, CallbackQueryHandler, ContextTypes, filters, )
 
-conn = sqlite3.connect("taskhive.db", check_same_thread=False) c = conn.cursor()
+TOKEN = os.getenv("TOKEN") BOT_USERNAME = "Task_Hive" ADMIN_ID = 8728887265 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk" MIN_WITHDRAW = 1500
 
-c.execute("""CREATE TABLE IF NOT EXISTS users ( user_id INTEGER PRIMARY KEY, username TEXT, points INTEGER DEFAULT 0, referrals INTEGER DEFAULT 0 )""")
+DATA_DIR = "data" FILES_DIR = f"{DATA_DIR}/files"
 
-c.execute("""CREATE TABLE IF NOT EXISTS tasks ( id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, points INTEGER )""")
+os.makedirs(DATA_DIR, exist_ok=True) os.makedirs(FILES_DIR, exist_ok=True)
 
-c.execute("""CREATE TABLE IF NOT EXISTS submissions ( id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_id INTEGER, text TEXT, file_path TEXT )""")
+conn = sqlite3.connect(f"{DATA_DIR}/taskhive.db", check_same_thread=False) c = conn.cursor()
 
-c.execute("""CREATE TABLE IF NOT EXISTS withdrawals ( id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, wallet TEXT, points INTEGER, status TEXT )""")
+USERS
+
+c.execute( """ CREATE TABLE IF NOT EXISTS users( telegram_id INTEGER PRIMARY KEY, username TEXT, points INTEGER DEFAULT 0, ref_by INTEGER ) """ )
+
+TASKS
+
+c.execute( """ CREATE TABLE IF NOT EXISTS tasks( id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, description TEXT, points INTEGER ) """ )
+
+SUBMISSIONS
+
+c.execute( """ CREATE TABLE IF NOT EXISTS submissions( id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, task_id INTEGER, file TEXT, text TEXT, timestamp TEXT ) """ )
+
+WITHDRAWALS
+
+c.execute( """ CREATE TABLE IF NOT EXISTS withdrawals( id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER, points INTEGER, method TEXT, status TEXT ) """ )
 
 conn.commit()
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): user = update.effective_user
+pending_task = {}
 
-c.execute("SELECT * FROM users WHERE user_id=?", (user.id,))
-exists = c.fetchone()
+START
 
-if not exists:
-    c.execute("INSERT INTO users (user_id, username) VALUES (?, ?)", (user.id, user.username))
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+user = update.effective_user
+user_id = user.id
+username = user.username or f"user{user_id}"
+
+ref = None
+
+if context.args:
+    arg = context.args[0]
+    if arg.startswith("ref_"):
+        ref = int(arg.split("_")[1])
+
+c.execute("SELECT * FROM users WHERE telegram_id=?", (user_id,))
+user_data = c.fetchone()
+
+if not user_data:
+
+    c.execute(
+        "INSERT INTO users (telegram_id, username, points, ref_by) VALUES (?,?,?,?)",
+        (user_id, username, 50, ref),
+    )
+
     conn.commit()
 
-    await update.message.reply_text(
-        f"""👋 Welcome to TaskHive
+    if ref:
+        c.execute("UPDATE users SET points = points + 150 WHERE telegram_id=?", (ref,))
+        conn.commit()
 
-Earn points by completing simple online tasks.
+    text = f"""
 
-📢 Join announcements: {CHANNEL_LINK}
+Welcome to TaskHive {username} 🚀
 
-Use /tasks to start earning.""" )
+Earn points by completing simple tasks.
+
+Invite friends. Complete surveys. Submit photos and voice tasks.
+
+Join our announcements channel: {CHANNEL_LINK}
+
+You received 50 bonus points.
+
+Use /tasks to start earning. """
 
 else:
-    c.execute("SELECT points FROM users WHERE user_id=?", (user.id,))
-    points = c.fetchone()[0]
 
-    await update.message.reply_text(
-        f"Welcome back @{user.username}\n\n⭐ Points: {points}\n\nUse /tasks to earn more."
-    )
+    pts = user_data[2]
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text( f"""Commands:
+    text = f"""
 
-/tasks - View tasks /profile - Your stats /referral - Get referral link /withdraw - Withdraw points
+Welcome back @{username}
 
-📢 Channel: {CHANNEL_LINK}""" )
+Your current points: {pts}
 
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE): user = update.effective_user
+Use /tasks to continue earning. """
 
-c.execute("SELECT points, referrals FROM users WHERE user_id=?", (user.id,))
-data = c.fetchone()
+await update.message.reply_text(text)
 
-await update.message.reply_text(
-    f"👤 @{user.username}\n⭐ Points: {data[0]}\n👥 Referrals: {data[1]}"
-)
+HELP
 
-async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE): c.execute("SELECT * FROM tasks") tasks = c.fetchall()
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-if not tasks:
-    await update.message.reply_text("No tasks available right now.")
+text = f"""
+
+TaskHive Commands
+
+/start /tasks /profile /referral /withdraw /help
+
+Announcement Channel: {CHANNEL_LINK} """
+
+await update.message.reply_text(text)
+
+PROFILE
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+uid = update.effective_user.id
+
+c.execute("SELECT points FROM users WHERE telegram_id=?", (uid,))
+pts = c.fetchone()[0]
+
+text = f"""
+
+Your Profile
+
+Points: {pts} Minimum Withdraw: {MIN_WITHDRAW} """
+
+await update.message.reply_text(text)
+
+TASKS
+
+async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+c.execute("SELECT * FROM tasks")
+rows = c.fetchall()
+
+if not rows:
+    await update.message.reply_text("No tasks available yet")
     return
 
-for task in tasks:
-    keyboard = [[InlineKeyboardButton("Submit", callback_data=f"task_{task[0]}")]]
+kb = []
 
-    await update.message.reply_text(
-        f"📌 {task[1]}\n{task[2]}\n⭐ Reward: {task[3]} pts",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+for t in rows:
+    kb.append([InlineKeyboardButton(f"{t[1]} ({t[3]} pts)", callback_data=f"task_{t[0]}")])
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE): query = update.callback_query await query.answer()
+await update.message.reply_text("Available Tasks", reply_markup=InlineKeyboardMarkup(kb))
 
-task_id = query.data.split("_")[1]
+SELECT TASK
 
-context.user_data["task"] = task_id
+async def task_select(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-await query.message.reply_text("Send your proof (text or screenshot).")
+q = update.callback_query
+await q.answer()
 
-async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE): if "task" not in context.user_data: return
+task_id = int(q.data.split("_")[1])
 
-task_id = context.user_data["task"]
-user = update.effective_user
+c.execute("SELECT * FROM tasks WHERE id=?", (task_id,))
+t = c.fetchone()
 
-text = update.message.text if update.message.text else ""
+pending_task[q.from_user.id] = task_id
+
+text = f"""
+
+Task: {t[1]}
+
+{t[2]}
+
+Send your proof now. """
+
+await q.edit_message_text(text)
+
+SUBMISSION
+
+async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+uid = update.effective_user.id
+
+if uid not in pending_task:
+    return
+
+task_id = pending_task.pop(uid)
+
 file_path = None
+text = None
 
 if update.message.photo:
-    photo = update.message.photo[-1]
-    file = await photo.get_file()
-    path = f"sub_{user.id}_{datetime.now().timestamp()}.jpg"
-    await file.download_to_drive(path)
-    file_path = path
+
+    file = await update.message.photo[-1].get_file()
+
+    file_path = f"{FILES_DIR}/{uid}_{datetime.now().timestamp()}.jpg"
+
+    await file.download_to_drive(file_path)
+
+elif update.message.voice:
+
+    file = await update.message.voice.get_file()
+
+    file_path = f"{FILES_DIR}/{uid}_{datetime.now().timestamp()}.ogg"
+
+    await file.download_to_drive(file_path)
+
+else:
+
+    text = update.message.text
 
 c.execute(
-    "INSERT INTO submissions (user_id, task_id, text, file_path) VALUES (?, ?, ?, ?)",
-    (user.id, task_id, text, file_path)
+    "INSERT INTO submissions (user_id,task_id,file,text,timestamp) VALUES (?,?,?,?,?)",
+    (uid, task_id, file_path, text, datetime.now()),
 )
+
+c.execute("SELECT points FROM tasks WHERE id=?", (task_id,))
+
+pts = c.fetchone()[0]
+
+c.execute("UPDATE users SET points = points + ? WHERE telegram_id=?", (pts, uid))
 
 conn.commit()
 
-await update.message.reply_text("✅ Submission received.")
+await update.message.reply_text(f"Submission received. +{pts} points")
 
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE): user = update.effective_user
+REFERRAL
 
-link = f"https://t.me/{context.bot.username}?start={user.id}"
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-await update.message.reply_text(f"Your referral link:\n{link}")
+uid = update.effective_user.id
 
-async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE): user = update.effective_user
+link = f"https://t.me/{BOT_USERNAME}?start=ref_{uid}"
 
-c.execute("SELECT points FROM users WHERE user_id=?", (user.id,))
-points = c.fetchone()[0]
+await update.message.reply_text(
+    f"Your referral link:\n{link}\n\nEarn 150 points per friend"
+)
 
-if points < MIN_WITHDRAW:
+WITHDRAW
+
+async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+uid = update.effective_user.id
+
+c.execute("SELECT points FROM users WHERE telegram_id=?", (uid,))
+
+pts = c.fetchone()[0]
+
+if pts < MIN_WITHDRAW:
+
     await update.message.reply_text(
-        f"Minimum withdrawal is {MIN_WITHDRAW} points."
+        f"Minimum withdrawal is {MIN_WITHDRAW} points"
     )
+
     return
 
-context.user_data["withdraw"] = True
-
-await update.message.reply_text("Send your wallet or payment address.")
-
-async def wallet(update: Update, context: ContextTypes.DEFAULT_TYPE): if "withdraw" not in context.user_data: return
-
-user = update.effective_user
-wallet = update.message.text
-
-c.execute("SELECT points FROM users WHERE user_id=?", (user.id,))
-points = c.fetchone()[0]
-
 c.execute(
-    "INSERT INTO withdrawals (user_id, wallet, points, status) VALUES (?, ?, ?, 'pending')",
-    (user.id, wallet, points)
+    "INSERT INTO withdrawals (user_id,points,method,status) VALUES (?,?,?,?)",
+    (uid, pts, "pending", "pending"),
 )
 
-c.execute("UPDATE users SET points=0 WHERE user_id=?", (user.id,))
+c.execute("UPDATE users SET points = 0 WHERE telegram_id=?", (uid,))
 
 conn.commit()
 
-await update.message.reply_text("💰 Withdrawal request submitted.")
+await update.message.reply_text("Withdrawal request sent to admin")
 
-async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE): if update.effective_user.id != ADMIN_ID: return
+ADMIN USERS
 
-title = context.args[0]
-points = int(context.args[1])
-description = " ".join(context.args[2:])
+async def users(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-c.execute(
-    "INSERT INTO tasks (title, description, points) VALUES (?, ?, ?)",
-    (title, description, points)
+if update.effective_user.id != ADMIN_ID:
+    return
+
+c.execute("SELECT username,points FROM users ORDER BY points DESC")
+
+rows = c.fetchall()
+
+text = f"Users: {len(rows)}\n\n"
+
+for r in rows[:50]:
+    text += f"@{r[0]} - {r[1]} pts\n"
+
+await update.message.reply_text(text)
+
+ADMIN ADD TASK
+
+async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+if update.effective_user.id != ADMIN_ID:
+    return
+
+try:
+
+    title = context.args[0]
+    points = int(context.args[1])
+
+    desc = " ".join(context.args[2:])
+
+    c.execute(
+        "INSERT INTO tasks (title,description,points) VALUES (?,?,?)",
+        (title, desc, points),
+    )
+
+    conn.commit()
+
+    await update.message.reply_text("Task added")
+
+except:
+
+    await update.message.reply_text("Usage: /addtask title points description")
+
+ADMIN ZIP DOWNLOAD
+
+async def export(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+if update.effective_user.id != ADMIN_ID:
+    return
+
+zipname = f"{DATA_DIR}/submissions.zip"
+
+with zipfile.ZipFile(zipname, "w") as z:
+
+    for f in os.listdir(FILES_DIR):
+        z.write(f"{FILES_DIR}/{f}")
+
+await update.message.reply_document(open(zipname, "rb"))
+
+MAIN
+
+def main():
+
+app = Application.builder().token(TOKEN).build()
+
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("help", help_cmd))
+app.add_handler(CommandHandler("tasks", tasks))
+app.add_handler(CommandHandler("profile", profile))
+app.add_handler(CommandHandler("referral", referral))
+app.add_handler(CommandHandler("withdraw", withdraw))
+
+app.add_handler(CommandHandler("users", users))
+app.add_handler(CommandHandler("addtask", addtask))
+app.add_handler(CommandHandler("export", export))
+
+app.add_handler(CallbackQueryHandler(task_select))
+
+app.add_handler(
+    MessageHandler(filters.TEXT | filters.PHOTO | filters.VOICE, submission)
 )
 
-conn.commit()
+print("TaskHive PRO Bot Running...")
 
-await update.message.reply_text("Task added.")
+app.run_polling()
 
-async def users(update: Update, context: ContextTypes.DEFAULT_TYPE): if update.effective_user.id != ADMIN_ID: return
-
-c.execute("SELECT COUNT(*) FROM users")
-total = c.fetchone()[0]
-
-await update.message.reply_text(f"Total users: {total}")
-
-async def download(update: Update, context: ContextTypes.DEFAULT_TYPE): if update.effective_user.id != ADMIN_ID: return
-
-c.execute("SELECT file_path FROM submissions WHERE file_path IS NOT NULL")
-files = c.fetchall()
-
-zip_name = "submissions.zip"
-
-with zipfile.ZipFile(zip_name, "w") as z:
-    for f in files:
-        if os.path.exists(f[0]):
-            z.write(f[0])
-
-await update.message.reply_document(open(zip_name, "rb"))
-
-app = ApplicationBuilder().token(TOKEN).build()
-
-app.add_handler(CommandHandler("start", start)) app.add_handler(CommandHandler("help", help_command)) app.add_handler(CommandHandler("tasks", tasks)) app.add_handler(CommandHandler("profile", profile)) app.add_handler(CommandHandler("referral", referral)) app.add_handler(CommandHandler("withdraw", withdraw)) app.add_handler(CommandHandler("addtask", addtask)) app.add_handler(CommandHandler("users", users)) app.add_handler(CommandHandler("download_submissions", download))
-
-app.add_handler(CallbackQueryHandler(button))
-
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wallet)) app.add_handler(MessageHandler(filters.ALL, submission))
-
-print("TaskHive Bot Running...") app.run_polling()
+if name == "main": main()
