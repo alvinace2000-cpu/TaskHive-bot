@@ -326,22 +326,55 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     step = admin_add[uid]
 
+    # STEP 1 — TITLE
     if step == "title":
 
-        context.user_data["title"] = update.message.text
+        context.user_data["task_title"] = update.message.text
         admin_add[uid] = "desc"
-        await update.message.reply_text("Send description")
 
-    elif step == "desc":
+        await update.message.reply_text("Send task description")
 
-        context.user_data["desc"] = update.message.text
+        return
+
+    # STEP 2 — DESCRIPTION
+    if step == "desc":
+
+        context.user_data["task_desc"] = update.message.text
         admin_add[uid] = "points"
-        await update.message.reply_text("Send reward points")
 
-    elif step == "points":
+        await update.message.reply_text("Send task reward points")
 
-        context.user_data["points"] = int(update.message.text)
+        return
+
+    # STEP 3 — POINTS
+    if step == "points":
+
+        context.user_data["task_points"] = int(update.message.text)
         admin_add[uid] = "limit"
+
+        await update.message.reply_text("Send submission limit")
+
+        return
+
+    # STEP 4 — LIMIT
+    if step == "limit":
+
+        limit = int(update.message.text)
+
+        title = context.user_data["task_title"]
+        desc = context.user_data["task_desc"]
+        points = context.user_data["task_points"]
+
+        c.execute(
+            "INSERT INTO tasks(title,description,points,limit_count) VALUES(?,?,?,?)",
+            (title, desc, points, limit)
+        )
+
+        conn.commit()
+
+        admin_add.pop(uid)
+
+        await update.message.reply_text("✅ Task added successfully")
         await update.message.reply_text("Send submission limit")
 
     elif step == "limit":
