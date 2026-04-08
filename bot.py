@@ -40,6 +40,15 @@ limit_count INTEGER
 """)
 
 # SUBMISSIONS
+c.execute(
+    "SELECT * FROM submissions WHERE user_id=? AND task_id=?",
+    (uid, task_id)
+)
+
+if c.fetchone():
+    await update.message.reply_text("❌ You already completed this task.")
+    return
+    
 c.execute("""
 CREATE TABLE IF NOT EXISTS submissions(
 id INTEGER PRIMARY KEY AUTOINCREMENT,
