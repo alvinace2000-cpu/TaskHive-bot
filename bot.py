@@ -253,13 +253,17 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
 
-        [InlineKeyboardButton("👥 Users", callback_data="users")],
-        [InlineKeyboardButton("📊 Submissions", callback_data="subs")],
-        [InlineKeyboardButton("➕ Add Task", callback_data="addtask")],
-        [InlineKeyboardButton("❌ Delete Task", callback_data="deltask")],
-        [InlineKeyboardButton("📦 Export ZIP", callback_data="zip")]
+[InlineKeyboardButton("👥 Users", callback_data="users")],
 
-    ]
+[InlineKeyboardButton("📊 Submissions", callback_data="subs")],
+
+[InlineKeyboardButton("➕ Add Task", callback_data="addtask")],
+
+[InlineKeyboardButton("🗑 Delete Task", callback_data="deltask")],
+
+[InlineKeyboardButton("📦 Export ZIP", callback_data="zip")]
+
+]
 
     await update.message.reply_text(
         "⚙️ Admin Panel",
