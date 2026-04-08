@@ -210,7 +210,24 @@ async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     else:
         text = update.message.text
+c.execute(
+    "SELECT COUNT(*) FROM submissions WHERE task_id=?",
+    (task_id,)
+)
 
+count = c.fetchone()[0]
+
+c.execute(
+    "SELECT limit_count FROM tasks WHERE id=?",
+    (task_id,)
+)
+
+limit = c.fetchone()[0]
+
+if count >= limit:
+    await update.message.reply_text("❌ Task submission limit reached.")
+    return
+    
     c.execute(
         "INSERT INTO submissions(user_id,task_id,file_path,text_answer,time) VALUES(?,?,?,?,?)",
         (uid, task_id, file_path, text, str(datetime.now()))
