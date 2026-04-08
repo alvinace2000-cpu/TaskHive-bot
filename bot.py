@@ -1,6 +1,7 @@
 import os
 import sqlite3
 import zipfile
+import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -11,6 +12,10 @@ from telegram.ext import (
     ContextTypes,
     filters
 )
+
+# ====================== SETUP ======================
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 TOKEN = os.getenv("TOKEN")
 
@@ -23,10 +28,10 @@ SUB_DIR = f"{DATA_DIR}/submissions"
 
 os.makedirs(SUB_DIR, exist_ok=True)
 
+# ====================== DATABASE ======================
 conn = sqlite3.connect(f"{DATA_DIR}/taskhive.db", check_same_thread=False)
 c = conn.cursor()
 
-# ====================== TABLES ======================
 c.execute("""CREATE TABLE IF NOT EXISTS users(
     id INTEGER PRIMARY KEY,
     username TEXT,
@@ -59,19 +64,17 @@ c.execute("""CREATE TABLE IF NOT EXISTS withdrawals(
     status TEXT
 )""")
 
-# ====================== MIGRATION ======================
+# Migration for max_submissions
 c.execute("PRAGMA table_info(tasks)")
-cols = [row[1] for row in c.fetchall()]
-if "max_submissions" not in cols:
+if "max_submissions" not in [row[1] for row in c.fetchall()]:
     c.execute("ALTER TABLE tasks ADD COLUMN max_submissions INTEGER DEFAULT 1")
     conn.commit()
-    print("✅ Database migrated: max_submissions column added")
+    print("✅ Database migrated: max_submissions added")
 
 conn.commit()
 
 pending_task = {}
 pending_withdraw = {}
-
 MIN_WITHDRAW = 1500
 
 
@@ -488,8 +491,18 @@ async def deletetask(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ====================== MAIN ======================
 def main():
+    if not TOKEN:
+        print("❌ CRITICAL ERROR: TOKEN environment variable is NOT set!")
+        print("   → Go to your hosting panel and set TOKEN=your_bot_token_here")
+        print("   → Or run: export TOKEN=your_actual_bot_token")
+        return
+
+    print(f"✅ TOKEN loaded (length: {len(TOKEN)} characters)")
+    print("🚀 Starting TaskHive Bot...")
+
     app = Application.builder().token(TOKEN).build()
 
+    # Register all handlers
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("points", points))
@@ -505,12 +518,17 @@ def main():
     app.add_handler(CallbackQueryHandler(button, pattern="task_"))
     app.add_handler(CallbackQueryHandler(admin_buttons))
 
-    # FIXED LINE BELOW ↓↓↓
     app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT | filters.VOICE, submission))
     app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, withdraw_wallet))
 
-    print("🚀 TaskHive Bot Running... (fixed & ready!)")
-    app.run_polling()
+    print("✅ All handlers registered successfully")
+    print("🔥 Bot is now live — try /start in Telegram!")
+
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Exception as e:
+        logger.error(f"Polling crashed: {e}")
+        print(f"❌ Polling error: {e}")
 
 
 if __name__ == "__main__":
