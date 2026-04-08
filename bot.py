@@ -91,17 +91,21 @@ Use /tasks to earn more points
 
 # POINTS
 async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     uid = update.effective_user.id
 
     c.execute("SELECT points FROM users WHERE id=?", (uid,))
-    pts = c.fetchone()[0]
+    user = c.fetchone()
+
+    if not user:
+        await update.message.reply_text("Use /start first")
+        return
+
+    pts = user[0]
 
     await update.message.reply_text(
-f"""💰 Your Points
-
-{pts} points
-"""
-)
+        f"💰 Your Points Balance\n\n{pts} points"
+    )
 
 
 # TASK LIST
