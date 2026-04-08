@@ -412,7 +412,8 @@ def main():
     app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, submission))
     app.add_handler(MessageHandler(filters.TEXT, admin_messages))
 
-    print("TaskHive running...")
+    print("Bot running...")
+
     app.run_polling()
 
 
