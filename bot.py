@@ -2,18 +2,19 @@ import os
 import sqlite3
 import zipfile
 from datetime import datetime
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-Application,
-CommandHandler,
-MessageHandler,
-CallbackQueryHandler,
-ContextTypes,
-filters
+    Application,
+    CommandHandler,
+    MessageHandler,
+    CallbackQueryHandler,
+    ContextTypes,
+    filters
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
+TOKEN = os.getenv("TOKEN")
+
+BOT_USERNAME = "Task_Hive"
 ADMIN_ID = 8728887265
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
@@ -25,390 +26,515 @@ os.makedirs(SUB_DIR, exist_ok=True)
 conn = sqlite3.connect(f"{DATA_DIR}/taskhive.db", check_same_thread=False)
 c = conn.cursor()
 
-# DATABASE
+# ====================== TABLES ======================
+c.execute("""CREATE TABLE IF NOT EXISTS users(
+    id INTEGER PRIMARY KEY,
+    username TEXT,
+    points INTEGER DEFAULT 0,
+    ref_by INTEGER
+)""")
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS users(
-id INTEGER PRIMARY KEY,
-username TEXT,
-points INTEGER DEFAULT 0
-)
-""")
+c.execute("""CREATE TABLE IF NOT EXISTS tasks(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT,
+    description TEXT,
+    points INTEGER,
+    max_submissions INTEGER DEFAULT 1
+)""")
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS tasks(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-title TEXT,
-description TEXT,
-points INTEGER,
-limit_count INTEGER
-)
-""")
+c.execute("""CREATE TABLE IF NOT EXISTS submissions(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    task_id INTEGER,
+    file_path TEXT,
+    text_answer TEXT,
+    time TEXT
+)""")
 
-c.execute("""
-CREATE TABLE IF NOT EXISTS submissions(
-id INTEGER PRIMARY KEY AUTOINCREMENT,
-user_id INTEGER,
-task_id INTEGER,
-file_path TEXT,
-text_answer TEXT,
-time TEXT
-)
-""")
+c.execute("""CREATE TABLE IF NOT EXISTS withdrawals(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    amount INTEGER,
+    wallet TEXT,
+    status TEXT
+)""")
+
+# ====================== MIGRATION (adds max_submissions if missing) ======================
+c.execute("PRAGMA table_info(tasks)")
+cols = [row[1] for row in c.fetchall()]
+if "max_submissions" not in cols:
+    c.execute("ALTER TABLE tasks ADD COLUMN max_submissions INTEGER DEFAULT 1")
+    conn.commit()
+    print("✅ Database migrated: max_submissions column added to tasks")
 
 conn.commit()
 
-pending_tasks = {}
-admin_state = {}
+pending_task = {}
+pending_withdraw = {}
 
-# START
+MIN_WITHDRAW = 1500
 
+
+# ====================== COMMANDS ======================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     user = update.effective_user
-    uid = user.id
+    user_id = user.id
     username = user.username or "user"
 
-    c.execute("SELECT * FROM users WHERE id=?", (uid,))
-    res = c.fetchone()
+    ref = None
+    if context.args:
+        if "ref_" in context.args[0]:
+            ref = int(context.args[0].split("_")[1])
 
-    if not res:
+    c.execute("SELECT * FROM users WHERE id=?", (user_id,))
+    result = c.fetchone()
 
+    if result:
+        pts = result[2]
+        await update.message.reply_text(
+            f"""👋 Welcome back @{username}
+
+💰 Your Points: {pts}
+
+Use /tasks to start earning more points."""
+        )
+    else:
         c.execute(
-        "INSERT INTO users(id,username,points) VALUES(?,?,?)",
-        (uid, username, 50)
+            "INSERT INTO users(id,username,points,ref_by) VALUES(?,?,?,?)",
+            (user_id, username, 50, ref)
         )
         conn.commit()
 
+        if ref and ref != user_id:
+            c.execute(
+                "UPDATE users SET points = points + 150 WHERE id=?",
+                (ref,)
+            )
+            conn.commit()
+
         await update.message.reply_text(
-f"""👋 Welcome to TaskHive @{username}
+            f"""👋 Welcome to TaskHive @{username}
 
-🎁 50 points bonus added
+You received 🎁 50 bonus points!
 
-Join announcements:
+Complete tasks and earn rewards.
+
+Join announcements👇
 {CHANNEL_LINK}
 
-Use /tasks to start earning points."""
-)
+Use /tasks to start."""
+        )
 
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        f"""
+🛠 TaskHive Commands
+
+/start
+/tasks
+/points
+/profile
+/referral
+/withdraw
+
+Admin commands (you only):
+/addtask
+/edittask
+/deletetask
+/admin
+
+Join announcements👇
+{CHANNEL_LINK}
+"""
+    )
+
+
+async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """NEW: Quick points command"""
+    user_id = update.effective_user.id
+    c.execute("SELECT points FROM users WHERE id=?", (user_id,))
+    result = c.fetchone()
+    if result:
+        await update.message.reply_text(f"💰 Your current points: **{result[0]}**")
     else:
+        await update.message.reply_text("❌ Use /start first!")
 
-        c.execute("SELECT points FROM users WHERE id=?", (uid,))
-        pts = c.fetchone()[0]
 
-        await update.message.reply_text(
-f"""👋 Welcome back @{username}
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    c.execute("SELECT points FROM users WHERE id=?", (user_id,))
+    pts = c.fetchone()[0]
+    await update.message.reply_text(
+        f"""
+👤 Profile
 
 💰 Points: {pts}
 
-Use /tasks to continue earning."""
-)
+Minimum withdrawal: {MIN_WITHDRAW}
+"""
+    )
 
-# POINTS
 
-async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    await update.message.reply_text(
+        f"""
+🔗 Your referral link
 
-    c.execute("SELECT points FROM users WHERE id=?", (uid,))
-    row = c.fetchone()
+https://t.me/{BOT_USERNAME}?start=ref_{uid}
 
-    if not row:
-        await update.message.reply_text("Use /start first")
-        return
+Earn 150 points per referral
+"""
+    )
 
-    await update.message.reply_text(f"💰 Your Points: {row[0]}")
-
-# TASK LIST
 
 async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     c.execute("SELECT * FROM tasks")
-    rows = c.fetchall()
+    tasks_list = c.fetchall()
 
-    if not rows:
+    if not tasks_list:
         await update.message.reply_text("No tasks available")
         return
 
     keyboard = []
-
-    for task in rows:
-
-        task_id = task[0]
-
-        c.execute(
-        "SELECT * FROM submissions WHERE user_id=? AND task_id=?",
-        (update.effective_user.id, task_id)
+    for t in tasks_list:
+        # t[0]=id, t[1]=title, t[2]=desc, t[3]=points, t[4]=max_submissions
+        keyboard.append(
+            [InlineKeyboardButton(
+                f"{t[1]} ({t[3]} pts | max {t[4]}x)",
+                callback_data=f"task_{t[0]}"
+            )]
         )
-
-        if c.fetchone():
-            continue
-
-        keyboard.append([
-        InlineKeyboardButton(
-        f"{task[1]} ({task[3]} pts)",
-        callback_data=f"task_{task_id}"
-        )
-        ])
 
     await update.message.reply_text(
-    "📋 Available Tasks",
-    reply_markup=InlineKeyboardMarkup(keyboard)
+        "📋 Available Tasks",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# TASK BUTTON
 
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
+async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-
     data = query.data
 
-    if data.startswith("task_"):
-
+    if "task_" in data:
         task_id = int(data.split("_")[1])
-        uid = query.from_user.id
-
-        pending_tasks[uid] = task_id
 
         c.execute("SELECT * FROM tasks WHERE id=?", (task_id,))
         task = c.fetchone()
+        if not task:
+            await query.message.reply_text("❌ Task not found")
+            return
+
+        # NEW: Check if user already hit max submissions (anti-farming)
+        c.execute(
+            "SELECT COUNT(*) FROM submissions WHERE user_id=? AND task_id=?",
+            (query.from_user.id, task_id)
+        )
+        sub_count = c.fetchone()[0]
+        max_sub = task[4]
+
+        if sub_count >= max_sub:
+            await query.message.reply_text(
+                f"❌ You've already submitted this task the maximum {max_sub} time(s).\n"
+                "No more farming allowed! 🔥"
+            )
+            return
+
+        # Allow selection
+        pending_task[query.from_user.id] = task_id
 
         await query.message.reply_text(
-f"""📌 Task
-
-{task[1]}
+            f"""
+✅ Task Selected: {task[1]}
 
 {task[2]}
 
-Send proof now."""
-)
+💰 Reward: {task[3]} points
+🔢 Max submissions: {max_sub}
 
-# SUBMISSION
+Send your proof now (photo, voice, or text).
+"""
+        )
 
-async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
+async def submission(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
-    if uid not in pending_tasks:
+    if uid not in pending_task:
         return
 
-    task_id = pending_tasks.pop(uid)
+    task_id = pending_task.pop(uid)
 
     text = None
     file_path = None
 
     if update.message.photo:
-
         file = await update.message.photo[-1].get_file()
         file_path = f"{SUB_DIR}/{uid}_{datetime.now().timestamp()}.jpg"
         await file.download_to_drive(file_path)
-
+    elif update.message.voice:
+        file = await update.message.voice.get_file()
+        file_path = f"{SUB_DIR}/{uid}_{datetime.now().timestamp()}.ogg"
+        await file.download_to_drive(file_path)
     else:
         text = update.message.text
 
+    # Save submission
     c.execute(
-    "SELECT COUNT(*) FROM submissions WHERE task_id=?",
-    (task_id,)
-    )
-    count = c.fetchone()[0]
-
-    c.execute(
-    "SELECT limit_count FROM tasks WHERE id=?",
-    (task_id,)
-    )
-    limit = c.fetchone()[0]
-
-    if count >= limit:
-
-        await update.message.reply_text("❌ Task limit reached")
-        return
-
-    c.execute(
-    "INSERT INTO submissions(user_id,task_id,file_path,text_answer,time) VALUES(?,?,?,?,?)",
-    (uid, task_id, file_path, text, str(datetime.now()))
+        "INSERT INTO submissions(user_id,task_id,file_path,text_answer,time) VALUES(?,?,?,?,?)",
+        (uid, task_id, file_path, text, str(datetime.now()))
     )
 
-    c.execute(
-    "SELECT points FROM tasks WHERE id=?",
-    (task_id,)
-    )
+    # Give points
+    c.execute("SELECT points FROM tasks WHERE id=?", (task_id,))
     reward = c.fetchone()[0]
 
     c.execute(
-    "UPDATE users SET points = points + ? WHERE id=?",
-    (reward, uid)
+        "UPDATE users SET points = points + ? WHERE id=?",
+        (reward, uid)
     )
-
     conn.commit()
 
     await update.message.reply_text(
-    f"✅ Task completed\n+{reward} points"
+        f"✅ Submission received!\n+{reward} points"
     )
 
-# ADMIN PANEL
 
+async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    c.execute("SELECT points FROM users WHERE id=?", (uid,))
+    pts = c.fetchone()[0]
+
+    if pts < MIN_WITHDRAW:
+        await update.message.reply_text(
+            f"❌ Minimum withdrawal is {MIN_WITHDRAW} points"
+        )
+        return
+
+    pending_withdraw[uid] = True
+    await update.message.reply_text("Send your crypto wallet address")
+
+
+async def withdraw_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if uid not in pending_withdraw:
+        return
+
+    wallet = update.message.text
+
+    c.execute(
+        "INSERT INTO withdrawals(user_id,amount,wallet,status) VALUES(?,?,?,?)",
+        (uid, MIN_WITHDRAW, wallet, "pending")
+    )
+    c.execute(
+        "UPDATE users SET points = points - ? WHERE id=?",
+        (MIN_WITHDRAW, uid)
+    )
+    conn.commit()
+    pending_withdraw.pop(uid)
+
+    await update.message.reply_text("✅ Withdrawal request submitted")
+
+
+# ====================== ADMIN ======================
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     if update.effective_user.id != ADMIN_ID:
         return
 
     keyboard = [
-
-[InlineKeyboardButton("👥 Users", callback_data="users")],
-
-[InlineKeyboardButton("➕ Add Task", callback_data="addtask")],
-
-[InlineKeyboardButton("❌ Delete Task", callback_data="delete")],
-
-[InlineKeyboardButton("📦 Export ZIP", callback_data="zip")]
-
-]
+        [InlineKeyboardButton("👥 Users", callback_data="users")],
+        [InlineKeyboardButton("📋 Tasks", callback_data="tasks")],   # NEW
+        [InlineKeyboardButton("📊 Submissions", callback_data="subs")],
+        [InlineKeyboardButton("📦 Export ZIP", callback_data="zip")]
+    ]
 
     await update.message.reply_text(
-    "⚙️ Admin Panel",
-    reply_markup=InlineKeyboardMarkup(keyboard)
+        "🔧 Admin Panel",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-# ADMIN BUTTONS
 
 async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
     query = update.callback_query
     await query.answer()
 
-    data = query.data
+    if query.data == "users":
+        # IMPROVED: now shows ALL users + points
+        c.execute("SELECT id, username, points FROM users ORDER BY points DESC")
+        user_list = c.fetchall()
+        if not user_list:
+            await query.message.reply_text("No users yet")
+            return
 
-    if data == "users":
-
-        c.execute("SELECT username,points FROM users")
-        rows = c.fetchall()
-
-        msg = "👥 Users\n\n"
-
-        for r in rows:
-            msg += f"{r[0]} | {r[1]} pts\n"
-
+        msg = f"👥 All Users ({len(user_list)} total):\n\n"
+        for u in user_list:
+            username = u[1] or f"no_username_{u[0]}"
+            msg += f"• @{username} (ID:{u[0]}) — {u[2]} pts\n"
         await query.message.reply_text(msg)
 
-    elif data == "addtask":
+    elif query.data == "tasks":
+        # NEW: List all tasks with IDs (easy to edit/delete)
+        c.execute("SELECT id, title, points, max_submissions FROM tasks")
+        tasks_list = c.fetchall()
+        if not tasks_list:
+            await query.message.reply_text("No tasks available")
+            return
 
-        admin_state[query.from_user.id] = "title"
-        await query.message.reply_text("Send task title")
+        msg = "📋 All Tasks:\n\n"
+        for t in tasks_list:
+            msg += f"ID: {t[0]} | {t[1]} | {t[2]} pts | max {t[3]}x\n"
+        await query.message.reply_text(msg)
 
-    elif data == "delete":
+    elif query.data == "subs":
+        c.execute("SELECT COUNT(*) FROM submissions")
+        count = c.fetchone()[0]
+        await query.message.reply_text(f"📊 Total Submissions: {count}")
 
-        c.execute("SELECT id,title FROM tasks")
-        rows = c.fetchall()
-
-        keyboard = []
-
-        for r in rows:
-
-            keyboard.append([
-            InlineKeyboardButton(
-            r[1],
-            callback_data=f"del_{r[0]}"
-            )
-            ])
-
-        await query.message.reply_text(
-        "Select task to delete",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-
-    elif data.startswith("del_"):
-
-        task_id = int(data.split("_")[1])
-
-        c.execute("DELETE FROM tasks WHERE id=?", (task_id,))
-        conn.commit()
-
-        await query.message.reply_text("Task deleted")
-
-    elif data == "zip":
-
+    elif query.data == "zip":
         zip_path = "submissions.zip"
-
         with zipfile.ZipFile(zip_path, "w") as z:
-
             for file in os.listdir(SUB_DIR):
-
                 z.write(f"{SUB_DIR}/{file}")
-
         await query.message.reply_document(open(zip_path, "rb"))
 
-# ADMIN TEXT FLOW
 
-async def admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    uid = update.effective_user.id
-
-    if uid not in admin_state:
+async def addtask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
         return
 
-    step = admin_state[uid]
+    if not context.args:
+        await update.message.reply_text(
+            """📌 Usage:
 
-    if step == "title":
+New format (recommended):
+/addtask title|description|points|max_submissions
 
-        context.user_data["title"] = update.message.text
-        admin_state[uid] = "desc"
+Example:
+/addtask Daily Login|Login to the channel daily|50|3
 
-        await update.message.reply_text("Send task description")
+Old format still works (max=1):
+/addtask Title|100|Description"""
+        )
+        return
 
-    elif step == "desc":
+    text = " ".join(context.args)
+    try:
+        parts = [p.strip() for p in text.split("|")]
 
-        context.user_data["desc"] = update.message.text
-        admin_state[uid] = "points"
-
-        await update.message.reply_text("Send reward points")
-
-    elif step == "points":
-
-        context.user_data["points"] = int(update.message.text)
-        admin_state[uid] = "limit"
-
-        await update.message.reply_text("Send submission limit")
-
-    elif step == "limit":
-
-        title = context.user_data["title"]
-        desc = context.user_data["desc"]
-        pts = context.user_data["points"]
-        limit = int(update.message.text)
+        if len(parts) == 3:  # backward compatible with your old command
+            title = parts[0]
+            pts = int(parts[1])
+            desc = parts[2]
+            maxs = 1
+        elif len(parts) == 4:
+            title = parts[0]
+            desc = parts[1]
+            pts = int(parts[2])
+            maxs = int(parts[3])
+        else:
+            raise ValueError
 
         c.execute(
-        "INSERT INTO tasks(title,description,points,limit_count) VALUES(?,?,?,?)",
-        (title, desc, pts, limit)
+            "INSERT INTO tasks(title,description,points,max_submissions) VALUES(?,?,?,?)",
+            (title, desc, pts, maxs)
         )
-
         conn.commit()
+        await update.message.reply_text(f"✅ Task added! (max submissions: {maxs})")
+    except:
+        await update.message.reply_text("❌ Wrong format. Check /help or use the example above.")
 
-        admin_state.pop(uid)
 
-        await update.message.reply_text("✅ Task added successfully")
+async def edittask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """NEW: Edit any task"""
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-# MAIN
+    if not context.args:
+        await update.message.reply_text(
+            """📌 Usage:
+/edittask id|title|description|points|max_submissions
 
+Example:
+/edittask 1|New Title|Updated description|150|2"""
+        )
+        return
+
+    text = " ".join(context.args)
+    try:
+        parts = [p.strip() for p in text.split("|")]
+        if len(parts) != 5:
+            raise ValueError
+
+        tid = int(parts[0])
+        title = parts[1]
+        desc = parts[2]
+        pts = int(parts[3])
+        maxs = int(parts[4])
+
+        c.execute(
+            "UPDATE tasks SET title=?, description=?, points=?, max_submissions=? WHERE id=?",
+            (title, desc, pts, maxs, tid)
+        )
+        if c.rowcount == 0:
+            await update.message.reply_text("❌ Task ID not found!")
+        else:
+            conn.commit()
+            await update.message.reply_text(f"✅ Task {tid} updated successfully!")
+    except:
+        await update.message.reply_text("❌ Wrong format. Use: id|title|description|points|max_submissions")
+
+
+async def deletetask(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """NEW: Delete a task"""
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    if not context.args:
+        await update.message.reply_text("Usage: /deletetask <id>\nExample: /deletetask 5")
+        return
+
+    try:
+        tid = int(" ".join(context.args))
+        c.execute("DELETE FROM tasks WHERE id=?", (tid,))
+        if c.rowcount == 0:
+            await update.message.reply_text("❌ Task ID not found!")
+        else:
+            conn.commit()
+            await update.message.reply_text(f"✅ Task {tid} deleted permanently!")
+    except:
+        await update.message.reply_text("Usage: /deletetask <id>")
+
+
+# ====================== MAIN ======================
 def main():
-
     app = Application.builder().token(TOKEN).build()
 
+    # Commands
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("points", points))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("points", points))          # NEW
     app.add_handler(CommandHandler("tasks", tasks))
+    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("referral", referral))
+    app.add_handler(CommandHandler("withdraw", withdraw))
     app.add_handler(CommandHandler("admin", admin))
+    app.add_handler(CommandHandler("addtask", addtask))
+    app.add_handler(CommandHandler("edittask", edittask))     # NEW
+    app.add_handler(CommandHandler("deletetask", deletetask)) # NEW
 
-    app.add_handler(CallbackQueryHandler(buttons, pattern="task_"))
+    # Callbacks
+    app.add_handler(CallbackQueryHandler(button, pattern="task_"))
     app.add_handler(CallbackQueryHandler(admin_buttons))
 
-    app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, submit))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text))
+    # Messages
+    app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT | filters.VOICE, submission))
+    app.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, withdraw_wallet))
 
-    print("TaskHive Bot Running...")
-
+    print("🚀 TaskHive Bot Running... (with all your new features!)")
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
