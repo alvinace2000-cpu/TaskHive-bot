@@ -363,12 +363,17 @@ async def admin_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # STEP 1 — TITLE
     if step == "title":
 
-        context.user_data["task_title"] = update.message.text
-        admin_add[uid] = "desc"
+        c.execute("SELECT username,points FROM users")
 
-        await update.message.reply_text("Send task description")
+users = c.fetchall()
 
-        return
+msg = "👥 Users List\n\n"
+
+for u in users:
+
+    msg += f"@{u[0]} — {u[1]} pts\n"
+
+await query.message.reply_text(msg)
 
     # STEP 2 — DESCRIPTION
     if step == "desc":
