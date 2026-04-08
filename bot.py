@@ -13,7 +13,7 @@ ContextTypes,
 filters
 )
 
-TOKEN = "PUT_YOUR_BOT_TOKEN_HERE"
+TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = 8728887265
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
@@ -78,7 +78,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "INSERT INTO users(id,username,points) VALUES(?,?,?)",
         (uid, username, 50)
         )
-
         conn.commit()
 
         await update.message.reply_text(
@@ -203,9 +202,7 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.message.photo:
 
         file = await update.message.photo[-1].get_file()
-
         file_path = f"{SUB_DIR}/{uid}_{datetime.now().timestamp()}.jpg"
-
         await file.download_to_drive(file_path)
 
     else:
@@ -215,14 +212,12 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     "SELECT COUNT(*) FROM submissions WHERE task_id=?",
     (task_id,)
     )
-
     count = c.fetchone()[0]
 
     c.execute(
     "SELECT limit_count FROM tasks WHERE id=?",
     (task_id,)
     )
-
     limit = c.fetchone()[0]
 
     if count >= limit:
@@ -239,7 +234,6 @@ async def submit(update: Update, context: ContextTypes.DEFAULT_TYPE):
     "SELECT points FROM tasks WHERE id=?",
     (task_id,)
     )
-
     reward = c.fetchone()[0]
 
     c.execute(
@@ -262,13 +256,13 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
 
-[InlineKeyboardButton("Users", callback_data="users")],
+[InlineKeyboardButton("👥 Users", callback_data="users")],
 
-[InlineKeyboardButton("Add Task", callback_data="addtask")],
+[InlineKeyboardButton("➕ Add Task", callback_data="addtask")],
 
-[InlineKeyboardButton("Delete Task", callback_data="delete")],
+[InlineKeyboardButton("❌ Delete Task", callback_data="delete")],
 
-[InlineKeyboardButton("Export ZIP", callback_data="zip")]
+[InlineKeyboardButton("📦 Export ZIP", callback_data="zip")]
 
 ]
 
@@ -294,7 +288,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "👥 Users\n\n"
 
         for r in rows:
-
             msg += f"{r[0]} | {r[1]} pts\n"
 
         await query.message.reply_text(msg)
@@ -302,7 +295,6 @@ async def admin_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "addtask":
 
         admin_state[query.from_user.id] = "title"
-
         await query.message.reply_text("Send task title")
 
     elif data == "delete":
@@ -370,7 +362,7 @@ async def admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["desc"] = update.message.text
         admin_state[uid] = "points"
 
-        await update.message.reply_text("Send task reward points")
+        await update.message.reply_text("Send reward points")
 
     elif step == "points":
 
@@ -393,9 +385,9 @@ async def admin_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         conn.commit()
 
-        del admin_state[uid]
+        admin_state.pop(uid)
 
-        await update.message.reply_text("✅ Task added")
+        await update.message.reply_text("✅ Task added successfully")
 
 # MAIN
 
@@ -412,9 +404,9 @@ def main():
     app.add_handler(CallbackQueryHandler(admin_buttons))
 
     app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, submit))
-    app.add_handler(MessageHandler(filters.TEXT, admin_text))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_text))
 
-    print("TaskHive bot running...")
+    print("TaskHive Bot Running...")
 
     app.run_polling()
 
