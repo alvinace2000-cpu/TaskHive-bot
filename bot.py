@@ -401,21 +401,29 @@ def main():
 
     app = Application.builder().token(TOKEN).build()
 
+    # COMMANDS
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("points", points))
+    app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("tasks", tasks))
+    app.add_handler(CommandHandler("points", profile))
+    app.add_handler(CommandHandler("profile", profile))
+    app.add_handler(CommandHandler("referral", referral))
+    app.add_handler(CommandHandler("withdraw", withdraw))
     app.add_handler(CommandHandler("admin", admin))
 
+    # BUTTONS
     app.add_handler(CallbackQueryHandler(button, pattern="task_"))
     app.add_handler(CallbackQueryHandler(admin_buttons))
 
-    app.add_handler(MessageHandler(filters.PHOTO | filters.TEXT, submission))
-    app.add_handler(MessageHandler(filters.TEXT, admin_messages))
+    # ADMIN INPUT (task creation)
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, admin_messages))
 
-    print("Bot running...")
+    # USER SUBMISSIONS
+    app.add_handler(MessageHandler(filters.PHOTO, submission))
+    app.add_handler(MessageHandler(filters.VOICE, submission))
 
+    # WITHDRAW WALLET
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, withdraw_wallet))
+
+    print("TaskHive Bot Running...")
     app.run_polling()
-
-
-if __name__ == "__main__":
-    main()
