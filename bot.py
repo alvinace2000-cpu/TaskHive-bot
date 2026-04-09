@@ -1,6 +1,8 @@
 import os
+import csv
 import sqlite3
 import zipfile
+import subprocess
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -12,6 +14,14 @@ from telegram.ext import (
     filters,
 )
 
+# ── Whisper (transcription) — optional, graceful fallback if not installed ──
+try:
+    import whisper as _whisper
+    WHISPER_MODEL = _whisper.load_model("base")
+    WHISPER_AVAILABLE = True
+except Exception:
+    WHISPER_AVAILABLE = False
+
 TOKEN = os.getenv("TOKEN")
 
 BOT_USERNAME = "Task_Hive"
@@ -19,61 +29,104 @@ ADMIN_ID = 8728887265
 CHANNEL_LINK = "https://t.me/+6WtlEwqjwccxOTVk"
 
 DATA_DIR = "data"
-SUB_DIR = f"{DATA_DIR}/submissions"
+SUB_DIR  = f"{DATA_DIR}/submissions"
+WAV_DIR  = f"{DATA_DIR}/wav"          # converted .wav files live here
 
 os.makedirs(SUB_DIR, exist_ok=True)
+os.makedirs(WAV_DIR,  exist_ok=True)
 
 conn = sqlite3.connect(f"{DATA_DIR}/taskhive.db", check_same_thread=False)
 c = conn.cursor()
 
 c.execute("""CREATE TABLE IF NOT EXISTS users(
-    id INTEGER PRIMARY KEY,
+    id       INTEGER PRIMARY KEY,
     username TEXT,
-    points INTEGER DEFAULT 0,
-    ref_by INTEGER
+    points   INTEGER DEFAULT 0,
+    ref_by   INTEGER
 )""")
 
 c.execute("""CREATE TABLE IF NOT EXISTS tasks(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    title TEXT,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    title       TEXT,
     description TEXT,
-    points INTEGER
+    points      INTEGER
 )""")
 
 c.execute("""CREATE TABLE IF NOT EXISTS submissions(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    user_id INTEGER,
-    task_id INTEGER,
-    file_path TEXT,
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER,
+    task_id     INTEGER,
+    file_path   TEXT,
+    wav_path    TEXT,
+    transcript  TEXT,
     text_answer TEXT,
-    time TEXT,
-    status TEXT DEFAULT 'pending'
+    time        TEXT,
+    status      TEXT DEFAULT 'pending'
 )""")
 
-# Migrate: add status column if upgrading from old database
-try:
-    c.execute("ALTER TABLE submissions ADD COLUMN status TEXT DEFAULT 'pending'")
-    conn.commit()
-except Exception:
-    pass  # Column already exists
+# ── Migrations for users upgrading from older schema ──
+for col, definition in [
+    ("status",     "TEXT DEFAULT 'pending'"),
+    ("wav_path",   "TEXT"),
+    ("transcript", "TEXT"),
+]:
+    try:
+        c.execute(f"ALTER TABLE submissions ADD COLUMN {col} {definition}")
+        conn.commit()
+    except Exception:
+        pass
 
 c.execute("""CREATE TABLE IF NOT EXISTS withdrawals(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id      INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
-    amount INTEGER,
-    wallet TEXT,
-    status TEXT
+    amount  INTEGER,
+    wallet  TEXT,
+    status  TEXT
 )""")
 
 conn.commit()
 
 # ── State tracking ──
-pending_task = {}      # uid -> task_id
+pending_task    = {}   # uid -> task_id
 pending_withdraw = {}  # uid -> True
-admin_state = {}       # uid -> state string
-admin_temp = {}        # uid -> partial data dict
+admin_state     = {}   # uid -> state string
+admin_temp      = {}   # uid -> partial data dict
 
 MIN_WITHDRAW = 1500
+
+
+# ──────────────────────────────────────────────
+# HELPERS
+# ──────────────────────────────────────────────
+
+def escape_md(text: str) -> str:
+    """Escape special characters for Telegram MarkdownV2."""
+    special = r"\_*[]()~`>#+-=|{}.!"
+    return "".join(f"\\{ch}" if ch in special else ch for ch in str(text))
+
+
+def ogg_to_wav(ogg_path: str, wav_path: str) -> bool:
+    """Convert .ogg to .wav using ffmpeg. Returns True on success."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-y", "-i", ogg_path, wav_path],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        return result.returncode == 0 and os.path.exists(wav_path)
+    except FileNotFoundError:
+        return False
+
+
+def transcribe(wav_path: str) -> str:
+    """Transcribe a wav file with Whisper. Returns transcript string or empty."""
+    if not WHISPER_AVAILABLE or not os.path.exists(wav_path):
+        return ""
+    try:
+        result = WHISPER_MODEL.transcribe(wav_path)
+        return result.get("text", "").strip()
+    except Exception:
+        return ""
 
 
 # ──────────────────────────────────────────────
@@ -81,8 +134,8 @@ MIN_WITHDRAW = 1500
 # ──────────────────────────────────────────────
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    user_id = user.id
+    user     = update.effective_user
+    user_id  = user.id
     username = user.username or "user"
 
     ref = None
@@ -125,17 +178,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🛠 TaskHive Commands\n\n"
-        "/start\n"
-        "/tasks\n"
-        "/points\n"
-        "/profile\n"
-        "/referral\n"
-        "/withdraw\n\n"
+        "/start\n/tasks\n/points\n/profile\n/referral\n/withdraw\n\n"
         f"Join announcements👇\n{CHANNEL_LINK}"
     )
 
 
-async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def points_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     c.execute("SELECT points FROM users WHERE id=?", (user_id,))
     row = c.fetchone()
@@ -143,9 +191,7 @@ async def points(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You're not registered yet. Use /start first.")
         return
     await update.message.reply_text(
-        f"💰 Your current points: *{row[0]}*\n\n"
-        f"Keep completing tasks to earn more!",
-        parse_mode="Markdown",
+        f"💰 Your current points: {row[0]}\n\nKeep completing tasks to earn more!"
     )
 
 
@@ -157,9 +203,7 @@ async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("You're not registered yet. Use /start first.")
         return
     await update.message.reply_text(
-        f"👤 Profile\n\n"
-        f"💰 Points: {row[0]}\n\n"
-        f"Minimum withdrawal: {MIN_WITHDRAW}"
+        f"👤 Profile\n\n💰 Points: {row[0]}\n\nMinimum withdrawal: {MIN_WITHDRAW}"
     )
 
 
@@ -189,10 +233,10 @@ async def tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         existing = c.fetchone()
         if existing:
-            status = existing[0]
-            if status == "approved":
+            s = existing[0]
+            if s == "approved":
                 label = f"✅ {t[1]} (completed)"
-            elif status == "pending":
+            elif s == "pending":
                 label = f"⏳ {t[1]} (under review)"
             else:
                 label = f"❌ {t[1]} (rejected)"
@@ -213,11 +257,10 @@ async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not row:
         await update.message.reply_text("Use /start first.")
         return
-    pts = row[0]
-    if pts < MIN_WITHDRAW:
+    if row[0] < MIN_WITHDRAW:
         await update.message.reply_text(
             f"❌ You need at least {MIN_WITHDRAW} points to withdraw.\n"
-            f"You currently have {pts} points."
+            f"You currently have {row[0]} points."
         )
         return
     pending_withdraw[uid] = True
@@ -230,13 +273,14 @@ async def withdraw(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def admin_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("➕ Add Task",        callback_data="admin_add")],
-        [InlineKeyboardButton("✏️ Edit Task",       callback_data="admin_edit")],
-        [InlineKeyboardButton("🗑 Delete Task",     callback_data="admin_delete")],
-        [InlineKeyboardButton("👥 View Users",      callback_data="admin_users")],
-        [InlineKeyboardButton("📋 Pending Reviews", callback_data="admin_pending")],
-        [InlineKeyboardButton("📢 Broadcast",       callback_data="admin_broadcast")],
-        [InlineKeyboardButton("📦 Download ZIP",    callback_data="admin_zip")],
+        [InlineKeyboardButton("➕ Add Task",          callback_data="admin_add")],
+        [InlineKeyboardButton("✏️ Edit Task",         callback_data="admin_edit")],
+        [InlineKeyboardButton("🗑 Delete Task",       callback_data="admin_delete")],
+        [InlineKeyboardButton("👥 View Users",        callback_data="admin_users")],
+        [InlineKeyboardButton("📋 Pending Reviews",   callback_data="admin_pending")],
+        [InlineKeyboardButton("📢 Broadcast",         callback_data="admin_broadcast")],
+        [InlineKeyboardButton("📦 Download ZIP",      callback_data="admin_zip")],
+        [InlineKeyboardButton("🎙 Speech Dataset",    callback_data="admin_dataset")],
     ])
 
 
@@ -253,26 +297,25 @@ async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    data = query.data
-    uid = query.from_user.id
+    data  = query.data
+    uid   = query.from_user.id
 
     # ── User: select a task ──
     if data.startswith("task_"):
         task_id = int(data.split("_")[1])
 
-        # Duplicate / status check
         c.execute(
             "SELECT status FROM submissions WHERE user_id=? AND task_id=?",
             (uid, task_id),
         )
         existing = c.fetchone()
         if existing:
-            status = existing[0]
-            if status == "approved":
+            s = existing[0]
+            if s == "approved":
                 await query.message.reply_text("✅ You already completed this task and earned your points!")
-            elif status == "pending":
-                await query.message.reply_text("⏳ Your submission for this task is still under review. Please wait.")
-            elif status == "rejected":
+            elif s == "pending":
+                await query.message.reply_text("⏳ Your submission is still under review. Please wait.")
+            elif s == "rejected":
                 await query.message.reply_text(
                     "❌ Your previous submission was rejected.\n\n"
                     "Please contact the admin if you think this was a mistake."
@@ -298,14 +341,15 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if uid != ADMIN_ID:
         return
 
+    # ── Back to panel ──
     if data == "admin_panel":
         await query.message.reply_text("🔧 Admin Panel", reply_markup=admin_keyboard())
 
     # ── Add Task ──
     elif data == "admin_add":
         admin_state[uid] = "add_title"
-        admin_temp[uid] = {}
-        await query.message.reply_text("📝 Enter the *task title*:", parse_mode="Markdown")
+        admin_temp[uid]  = {}
+        await query.message.reply_text("📝 Enter the task title:")
 
     # ── Edit Task ──
     elif data == "admin_edit":
@@ -328,6 +372,9 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         task_id = int(data.split("_")[-1])
         c.execute("SELECT * FROM tasks WHERE id=?", (task_id,))
         task = c.fetchone()
+        if not task:
+            await query.message.reply_text("Task not found.")
+            return
         admin_temp[uid] = {"task_id": task_id}
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("Title",       callback_data=f"admin_edit_field_title_{task_id}")],
@@ -336,22 +383,21 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("« Back",      callback_data="admin_edit")],
         ])
         await query.message.reply_text(
-            f"Editing: *{task[1]}*\n\nWhat do you want to change?",
+            f"Editing: {task[1]}\n\nWhat do you want to change?",
             reply_markup=keyboard,
-            parse_mode="Markdown",
         )
 
     elif data.startswith("admin_edit_field_"):
-        parts = data.split("_")
-        field = parts[3]
+        parts   = data.split("_")
+        field   = parts[3]
         task_id = int(parts[4])
         admin_state[uid] = f"edit_{field}_{task_id}"
         prompts = {
-            "title": "Enter the new *title*:",
-            "desc":  "Enter the new *description*:",
-            "pts":   "Enter the new *points* value (number):",
+            "title": "Enter the new title:",
+            "desc":  "Enter the new description:",
+            "pts":   "Enter the new points value (number):",
         }
-        await query.message.reply_text(prompts[field], parse_mode="Markdown")
+        await query.message.reply_text(prompts[field])
 
     # ── Delete Task ──
     elif data == "admin_delete":
@@ -382,9 +428,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("❌ Cancel",       callback_data="admin_delete")],
         ])
         await query.message.reply_text(
-            f"Are you sure you want to delete *{row[0]}*?",
+            f"Are you sure you want to delete '{row[0]}'?",
             reply_markup=keyboard,
-            parse_mode="Markdown",
         )
 
     elif data.startswith("admin_delete_do_"):
@@ -393,7 +438,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         conn.commit()
         await query.message.reply_text("🗑 Task deleted.", reply_markup=admin_keyboard())
 
-    # ── View Users ──
+    # ── View Users (FIXED: no Markdown parsing on usernames) ──
     elif data == "admin_users":
         c.execute("SELECT id, username, points FROM users ORDER BY points DESC")
         users = c.fetchall()
@@ -401,21 +446,27 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("No users yet.")
             return
         total = len(users)
-        lines = [f"👥 *Total users: {total}*\n"]
+        lines = [f"👥 Total users: {total}\n"]
         for u in users:
             uname = f"@{u[1]}" if u[1] and u[1] != "user" else f"ID:{u[0]}"
             lines.append(f"• {uname} — {u[2]} pts")
         chunk_size = 50
         for i in range(0, len(lines), chunk_size):
-            await query.message.reply_text(
-                "\n".join(lines[i:i + chunk_size]),
-                parse_mode="Markdown",
-            )
+            # Plain text — no parse_mode, avoids Markdown symbol crashes
+            await query.message.reply_text("\n".join(lines[i:i + chunk_size]))
 
-    # ── Pending Submissions (Approval Queue) ──
+    # ── Pending Reviews (FIXED: explicit column aliases) ──
     elif data == "admin_pending":
         c.execute("""
-            SELECT s.id, u.username, u.id, t.title, s.file_path, s.text_answer, s.time
+            SELECT
+                s.id          AS sub_id,
+                u.username    AS uname,
+                u.id          AS uid,
+                t.title       AS task_title,
+                s.file_path,
+                s.transcript,
+                s.text_answer,
+                s.time
             FROM submissions s
             LEFT JOIN users u ON s.user_id = u.id
             LEFT JOIN tasks t ON s.task_id = t.id
@@ -428,34 +479,42 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.message.reply_text("✅ No pending submissions right now!")
             return
         for s in subs:
-            sub_id, username, user_id, task_title, file_path, text_answer, sub_time = s
-            uname = f"@{username}" if username and username != "user" else f"ID:{user_id}"
+            sub_id, uname, sub_uid, task_title, file_path, transcript, text_answer, sub_time = s
+            display_name = f"@{uname}" if uname and uname != "user" else f"ID:{sub_uid}"
             caption = (
-                f"📥 *Submission #{sub_id}*\n\n"
-                f"👤 User: {uname}\n"
-                f"📌 Task: {task_title}\n"
+                f"📥 Submission #{sub_id}\n\n"
+                f"👤 User: {display_name}\n"
+                f"📌 Task: {task_title or 'Unknown'}\n"
                 f"🕐 Time: {sub_time}\n"
             )
-            if text_answer:
+            if transcript:
+                caption += f"🎙 Transcript: {transcript}\n"
+            elif text_answer:
                 caption += f"💬 Answer: {text_answer}\n"
+
             keyboard = InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton("✅ Approve", callback_data=f"approve_{sub_id}"),
                     InlineKeyboardButton("❌ Reject",  callback_data=f"reject_{sub_id}"),
                 ]
             ])
+            sent = False
             if file_path and os.path.exists(file_path):
-                with open(file_path, "rb") as f:
-                    if file_path.endswith(".jpg"):
-                        await query.message.reply_photo(f, caption=caption, reply_markup=keyboard, parse_mode="Markdown")
-                    elif file_path.endswith(".ogg"):
-                        await query.message.reply_voice(f, caption=caption, reply_markup=keyboard, parse_mode="Markdown")
-                    else:
-                        await query.message.reply_document(f, caption=caption, reply_markup=keyboard, parse_mode="Markdown")
-            else:
-                await query.message.reply_text(caption, reply_markup=keyboard, parse_mode="Markdown")
+                try:
+                    with open(file_path, "rb") as f:
+                        if file_path.endswith(".jpg"):
+                            await query.message.reply_photo(f, caption=caption, reply_markup=keyboard)
+                        elif file_path.endswith((".ogg", ".wav")):
+                            await query.message.reply_voice(f, caption=caption, reply_markup=keyboard)
+                        else:
+                            await query.message.reply_document(f, caption=caption, reply_markup=keyboard)
+                    sent = True
+                except Exception:
+                    pass
+            if not sent:
+                await query.message.reply_text(caption, reply_markup=keyboard)
 
-    # ── Approve submission ──
+    # ── Approve ──
     elif data.startswith("approve_"):
         sub_id = int(data.split("_")[1])
         c.execute("SELECT user_id, task_id, status FROM submissions WHERE id=?", (sub_id,))
@@ -477,13 +536,12 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 sub_user_id,
-                f"🎉 Your submission was *approved*!\n\n+{reward} points have been added to your account 💰",
-                parse_mode="Markdown",
+                f"🎉 Your submission was approved!\n\n+{reward} points added to your account 💰",
             )
         except Exception:
             pass
 
-    # ── Reject submission ──
+    # ── Reject ──
     elif data.startswith("reject_"):
         sub_id = int(data.split("_")[1])
         c.execute("SELECT user_id, status FROM submissions WHERE id=?", (sub_id,))
@@ -501,8 +559,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 sub_user_id,
-                "❌ Your submission was *rejected*.\n\nContact the admin if you think this was a mistake.",
-                parse_mode="Markdown",
+                "❌ Your submission was rejected.\n\nContact the admin if you think this was a mistake.",
             )
         except Exception:
             pass
@@ -511,8 +568,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "admin_broadcast":
         admin_state[uid] = "broadcast"
         await query.message.reply_text(
-            "📢 Type your broadcast message and send it.\n\n"
-            "Send /cancel to cancel."
+            "📢 Type your broadcast message and send it.\n\nSend /cancel to cancel."
         )
 
     # ── Download ZIP ──
@@ -523,12 +579,13 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 for fname in os.listdir(SUB_DIR):
                     z.write(os.path.join(SUB_DIR, fname), arcname=f"media/{fname}")
                 c.execute("""
-                    SELECT s.id, u.username, u.id, s.task_id, s.text_answer, s.file_path, s.time, s.status
+                    SELECT s.id, u.username, u.id, s.task_id,
+                           s.text_answer, s.transcript, s.file_path, s.time, s.status
                     FROM submissions s
                     LEFT JOIN users u ON s.user_id = u.id
                 """)
                 rows = c.fetchall()
-                csv_lines = ["id,username,user_id,task_id,text_answer,file_path,time,status"]
+                csv_lines = ["id,username,user_id,task_id,text_answer,transcript,file_path,time,status"]
                 for r in rows:
                     csv_lines.append(",".join(str(x) if x is not None else "" for x in r))
                 z.writestr("submissions.csv", "\n".join(csv_lines))
@@ -539,11 +596,127 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     ucsv.append(",".join(str(x) if x is not None else "" for x in r))
                 z.writestr("users.csv", "\n".join(ucsv))
             with open(zip_path, "rb") as f:
-                await query.message.reply_document(
-                    f, filename="taskhive_export.zip", caption="📦 Full data export"
-                )
+                await query.message.reply_document(f, filename="taskhive_export.zip", caption="📦 Full data export")
         except Exception as e:
             await query.message.reply_text(f"❌ Error creating ZIP: {e}")
+
+    # ── Speech Dataset Export ──
+    elif data == "admin_dataset":
+        await query.message.reply_text("🎙 Building speech dataset, please wait...")
+        try:
+            # Fetch all approved voice submissions that have a wav file
+            c.execute("""
+                SELECT s.id, s.wav_path, s.transcript
+                FROM submissions s
+                WHERE s.status = 'approved'
+                  AND s.wav_path IS NOT NULL
+                  AND s.wav_path != ''
+            """)
+            voice_subs = c.fetchall()
+
+            # Also pull pending/all voice subs if approved ones are empty
+            if not voice_subs:
+                c.execute("""
+                    SELECT s.id, s.wav_path, s.transcript
+                    FROM submissions s
+                    WHERE s.wav_path IS NOT NULL
+                      AND s.wav_path != ''
+                """)
+                voice_subs = c.fetchall()
+
+            if not voice_subs:
+                await query.message.reply_text(
+                    "❌ No voice submissions found yet.\n\n"
+                    "Voice submissions are automatically converted and transcribed when users submit audio tasks."
+                )
+                return
+
+            dataset_name = "taskhive_speech_dataset_v1"
+            zip_path     = f"{DATA_DIR}/{dataset_name}.zip"
+            valid_count  = 0
+
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
+                metadata_rows = []
+
+                for idx, (sub_id, wav_path, transcript) in enumerate(voice_subs, start=1):
+                    # Skip if wav file missing or transcript empty
+                    if not wav_path or not os.path.exists(wav_path):
+                        continue
+                    if not transcript or not transcript.strip():
+                        continue
+
+                    seq_name = f"{idx:06d}.wav"
+                    z.write(wav_path, arcname=f"{dataset_name}/audio/{seq_name}")
+                    metadata_rows.append((seq_name, transcript.strip()))
+                    valid_count += 1
+
+                if valid_count == 0:
+                    await query.message.reply_text(
+                        "❌ No valid audio+transcript pairs found.\n\n"
+                        "Make sure Whisper is installed and ffmpeg is available so transcripts are generated on submission."
+                    )
+                    return
+
+                # metadata.csv
+                csv_content = "file_name,transcript\n"
+                for row in metadata_rows:
+                    # Escape commas in transcript
+                    safe_transcript = row[1].replace('"', '""')
+                    csv_content += f'{row[0]},"{safe_transcript}"\n'
+                z.writestr(f"{dataset_name}/metadata.csv", csv_content)
+
+                # README.md
+                readme = f"""# TaskHive Speech Dataset v1
+
+## Dataset Info
+- **Name**: {dataset_name}
+- **Language**: Multilingual (detected automatically by Whisper)
+- **Number of samples**: {valid_count}
+- **Audio format**: WAV (16-bit PCM, mono, 16kHz recommended)
+- **Transcript format**: Plain text, auto-generated via OpenAI Whisper (base model)
+
+## Structure
+```
+{dataset_name}/
+├── audio/
+│   ├── 000001.wav
+│   ├── 000002.wav
+│   └── ...
+├── metadata.csv
+└── README.md
+```
+
+## metadata.csv Format
+```
+file_name,transcript
+000001.wav,Hello this is my first recording
+000002.wav,Artificial intelligence will transform the future
+```
+
+## Notes
+- All audio files are sourced from real human voice submissions via the TaskHive Telegram bot.
+- Transcripts were generated automatically using OpenAI Whisper (base model).
+- Empty transcripts and missing audio files were excluded before packaging.
+- Dataset is ready for use in training or fine-tuning speech recognition models.
+
+## License
+For internal use. Contact the dataset owner before redistribution.
+"""
+                z.writestr(f"{dataset_name}/README.md", readme)
+
+            with open(zip_path, "rb") as f:
+                await query.message.reply_document(
+                    f,
+                    filename=f"{dataset_name}.zip",
+                    caption=(
+                        f"🎙 Speech Dataset Ready!\n\n"
+                        f"Samples: {valid_count}\n"
+                        f"Format: WAV + metadata.csv\n"
+                        f"Transcription: Whisper base model"
+                    ),
+                )
+        except Exception as e:
+            await query.message.reply_text(f"❌ Error building dataset: {e}")
 
 
 # ──────────────────────────────────────────────
@@ -551,7 +724,7 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ──────────────────────────────────────────────
 
 async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
+    uid  = update.effective_user.id
     text = update.message.text or ""
 
     # ── Admin conversation flows ──
@@ -567,16 +740,11 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             admin_state.pop(uid, None)
             c.execute("SELECT id FROM users")
             all_users = c.fetchall()
-            sent = 0
-            failed = 0
+            sent = failed = 0
             await update.message.reply_text(f"📢 Sending to {len(all_users)} users...")
             for (user_id,) in all_users:
                 try:
-                    await context.bot.send_message(
-                        user_id,
-                        f"📢 *Announcement*\n\n{text}",
-                        parse_mode="Markdown",
-                    )
+                    await context.bot.send_message(user_id, f"📢 Announcement\n\n{text}")
                     sent += 1
                 except Exception:
                     failed += 1
@@ -590,13 +758,13 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if state == "add_title":
             admin_temp[uid]["title"] = text
             admin_state[uid] = "add_desc"
-            await update.message.reply_text("📝 Enter the *task description*:", parse_mode="Markdown")
+            await update.message.reply_text("📝 Enter the task description:")
             return
 
         elif state == "add_desc":
             admin_temp[uid]["desc"] = text
             admin_state[uid] = "add_pts"
-            await update.message.reply_text("💰 Enter the *points* reward (number):", parse_mode="Markdown")
+            await update.message.reply_text("💰 Enter the points reward (number):")
             return
 
         elif state == "add_pts":
@@ -613,16 +781,15 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             conn.commit()
             await update.message.reply_text(
-                f"✅ Task *{d['title']}* added with {pts} pts!",
-                parse_mode="Markdown",
+                f"✅ Task '{d['title']}' added with {pts} pts!",
                 reply_markup=admin_keyboard(),
             )
             return
 
         # Edit task
         elif state.startswith("edit_"):
-            parts = state.split("_")
-            field = parts[1]
+            parts   = state.split("_")
+            field   = parts[1]
             task_id = int(parts[2])
             if field == "title":
                 c.execute("UPDATE tasks SET title=? WHERE id=?", (text, task_id))
@@ -662,24 +829,42 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # ── Task submission (proof) ──
     if uid in pending_task:
-        task_id = pending_task.pop(uid)
-        file_path = None
+        task_id    = pending_task.pop(uid)
+        file_path  = None
+        wav_path   = None
+        transcript = None
 
         if update.message.photo:
-            file = await update.message.photo[-1].get_file()
+            file      = await update.message.photo[-1].get_file()
             file_path = f"{SUB_DIR}/{uid}_{datetime.now().timestamp()}.jpg"
             await file.download_to_drive(file_path)
+
         elif update.message.voice:
-            file = await update.message.voice.get_file()
+            file      = await update.message.voice.get_file()
             file_path = f"{SUB_DIR}/{uid}_{datetime.now().timestamp()}.ogg"
             await file.download_to_drive(file_path)
 
+            # Convert to WAV
+            wav_path = f"{WAV_DIR}/{uid}_{datetime.now().timestamp()}.wav"
+            converted = ogg_to_wav(file_path, wav_path)
+            if not converted:
+                wav_path = None
+
+            # Transcribe
+            if wav_path:
+                await update.message.reply_text("🎙 Transcribing your audio, one moment...")
+                transcript = transcribe(wav_path)
+
         c.execute(
-            "INSERT INTO submissions(user_id,task_id,file_path,text_answer,time,status) VALUES(?,?,?,?,?,?)",
+            """INSERT INTO submissions
+               (user_id, task_id, file_path, wav_path, transcript, text_answer, time, status)
+               VALUES (?,?,?,?,?,?,?,?)""",
             (
                 uid,
                 task_id,
                 file_path,
+                wav_path,
+                transcript,
                 text if not file_path else None,
                 str(datetime.now()),
                 "pending",
@@ -689,27 +874,28 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Notify admin
         c.execute("SELECT username FROM users WHERE id=?", (uid,))
-        urow = c.fetchone()
+        urow  = c.fetchone()
         uname = f"@{urow[0]}" if urow and urow[0] and urow[0] != "user" else f"ID:{uid}"
         c.execute("SELECT title FROM tasks WHERE id=?", (task_id,))
-        trow = c.fetchone()
+        trow  = c.fetchone()
         task_title = trow[0] if trow else "Unknown"
         try:
-            await context.bot.send_message(
-                ADMIN_ID,
-                f"📥 *New submission pending review!*\n\n"
+            notif = (
+                f"📥 New submission pending review!\n\n"
                 f"👤 User: {uname}\n"
-                f"📌 Task: {task_title}\n\n"
-                f"Go to /admin → 📋 Pending Reviews",
-                parse_mode="Markdown",
+                f"📌 Task: {task_title}\n"
             )
+            if transcript:
+                notif += f"🎙 Transcript: {transcript}\n"
+            notif += "\nGo to /admin → Pending Reviews"
+            await context.bot.send_message(ADMIN_ID, notif)
         except Exception:
             pass
 
-        await update.message.reply_text(
-            "✅ Submission received!\n\n"
-            "⏳ Your proof is under review. You'll be notified once it's approved."
-        )
+        reply = "✅ Submission received!\n\n⏳ Your proof is under review. You'll be notified once it's approved."
+        if transcript:
+            reply += f"\n\n🎙 We transcribed your audio:\n_{transcript}_"
+        await update.message.reply_text(reply)
         return
 
 
@@ -723,7 +909,7 @@ def main():
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("help",     help_command))
     app.add_handler(CommandHandler("tasks",    tasks))
-    app.add_handler(CommandHandler("points",   points))
+    app.add_handler(CommandHandler("points",   points_cmd))
     app.add_handler(CommandHandler("profile",  profile))
     app.add_handler(CommandHandler("referral", referral))
     app.add_handler(CommandHandler("withdraw", withdraw))
