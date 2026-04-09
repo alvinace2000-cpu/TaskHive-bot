@@ -481,16 +481,22 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for s in subs:
             sub_id, uname, sub_uid, task_title, file_path, transcript, text_answer, sub_time = s
             display_name = f"@{uname}" if uname and uname != "user" else f"ID:{sub_uid}"
-            caption = (
-                f"📥 Submission #{sub_id}\n\n"
-                f"👤 User: {display_name}\n"
-                f"📌 Task: {task_title or 'Unknown'}\n"
-                f"🕐 Time: {sub_time}\n"
-            )
+
+            # Build caption — plain text only, no Markdown, safe against any special characters
+            caption_parts = [
+                f"Submission #{sub_id}",
+                f"User: {display_name}",
+                f"Task: {task_title or 'Unknown'}",
+                f"Time: {sub_time}",
+            ]
             if transcript:
-                caption += f"🎙 Transcript: {transcript}\n"
+                # Truncate long transcripts so caption stays under Telegram's 1024 char limit
+                short = transcript[:300] + "..." if len(transcript) > 300 else transcript
+                caption_parts.append(f"Transcript: {short}")
             elif text_answer:
-                caption += f"💬 Answer: {text_answer}\n"
+                short = text_answer[:300] + "..." if len(text_answer) > 300 else text_answer
+                caption_parts.append(f"Answer: {short}")
+            caption = "\n".join(caption_parts)
 
             keyboard = InlineKeyboardMarkup([
                 [
@@ -903,8 +909,22 @@ async def message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # MAIN
 # ──────────────────────────────────────────────
 
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    import traceback
+    print(f"[ERROR] Exception while handling update:\n{traceback.format_exc()}")
+    try:
+        await context.bot.send_message(
+            ADMIN_ID,
+            f"⚠️ Bot error:\n{str(context.error)[:500]}"
+        )
+    except Exception:
+        pass
+
+
 def main():
     app = Application.builder().token(TOKEN).build()
+
+    app.add_error_handler(error_handler)
 
     app.add_handler(CommandHandler("start",    start))
     app.add_handler(CommandHandler("help",     help_command))
